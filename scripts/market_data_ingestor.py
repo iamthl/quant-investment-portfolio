@@ -104,6 +104,24 @@ async def fetch_alpha_vantage_quote(client: httpx.AsyncClient, symbol: str) -> O
         print(f"[AlphaVantage] Error: {e}")
         return None
 
+@app.get("/api/v1/quotes", response_model=Dict[str, list])
+async def get_bulk_quotes(symbols: str = Query(..., description="Comma-separated symbols")):
+    """Get latest quotes for multiple symbols"""
+    symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    quotes = []
+    
+    async with httpx.AsyncClient() as client:
+        # Create tasks for parallel execution
+        tasks = [get_quote(symbol) for symbol in symbol_list]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for res in results:
+            if isinstance(res, MarketDataPoint):
+                quotes.append(res)
+            # Ignore errors for individual symbols in bulk fetch
+            
+    return {"quotes": quotes}
+    
 @app.get("/api/v1/quote/{symbol}", response_model=MarketDataPoint)
 async def get_quote(symbol: str):
     symbol = symbol.upper()
@@ -128,10 +146,8 @@ async def get_quote(symbol: str):
         # Cache and return
         price_cache[symbol] = (data, datetime.utcnow())
         
-        # In production: await publish_to_kafka(KAFKA_TOPIC_RAW_MARKET, data.model_dump())
-        
         return data
-
+    
 async def publish_to_kafka(topic: str, message: dict):
     # Stub for Kafka publishing
     print(f"[Kafka] Publishing to {topic}: {message['symbol']} ${message['price']}")

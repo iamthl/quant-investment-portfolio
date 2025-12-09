@@ -505,6 +505,30 @@ async def get_trading_signal(symbol: str):
     
     return signal
 
+@app.get("/api/v1/signals", response_model=Dict[str, List[TradingSignal]])
+async def get_recent_signals(limit: int = 10):
+    """Get recent generated trading signals"""
+    # In a real app, this would query the database/kafka store
+    # Returning mock data for demonstration matching frontend expectation
+    mock_signals = [
+        TradingSignal(
+            symbol="BTC/USD", action="BUY", entry_price=43250, stop_loss=41500, 
+            take_profit=48000, position_size_pct=5.0, confidence=94, 
+            risk_reward_ratio=2.7, timestamp=datetime.utcnow().isoformat()
+        ),
+        TradingSignal(
+            symbol="NVDA", action="BUY", entry_price=485.2, stop_loss=460, 
+            take_profit=550, position_size_pct=5.0, confidence=91, 
+            risk_reward_ratio=2.5, timestamp=datetime.utcnow().isoformat()
+        ),
+        TradingSignal(
+            symbol="SOL/USD", action="SELL", entry_price=98.5, stop_loss=105, 
+            take_profit=85, position_size_pct=3.0, confidence=72, 
+            risk_reward_ratio=2.1, timestamp=datetime.utcnow().isoformat()
+        )
+    ]
+    return {"signals": mock_signals[:limit]}
+
 async def publish_to_kafka(topic: str, message: dict):
     """Kafka producer - in production use aiokafka"""
     print(f"[Kafka] Publishing to {topic}: {json.dumps(message)[:100]}...")
