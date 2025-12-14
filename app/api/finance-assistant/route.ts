@@ -1,11 +1,12 @@
 import { generateText } from "ai"
+import { google } from "@ai-sdk/google"
 
 export async function POST(req: Request) {
   const { message } = await req.json()
 
   try {
     const { text } = await generateText({
-      model: "openai/gpt-4o-mini",
+      model: google("gemini-2.5-flash"),      
       system: `You are a friendly and knowledgeable finance assistant designed to help non-professional traders understand financial concepts. Your role is to:
 
 1. Explain financial terms, indicators, and concepts in simple, easy-to-understand language
@@ -26,7 +27,7 @@ Topics you can help with:
 
 Do not provide specific investment advice or recommend buying/selling specific assets.`,
       prompt: message,
-      maxOutputTokens: 500,
+      maxTokens: 500, // maxOutputTokens in Python SDK maps to maxTokens here
       temperature: 0.7,
     })
 
