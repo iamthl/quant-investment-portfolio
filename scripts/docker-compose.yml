@@ -1,7 +1,5 @@
 # Run with: docker-compose up -d
 
-version: '3.8'
-
 services:
 
   # API Gateway
@@ -10,7 +8,7 @@ services:
     ports:
       - "80:80" # The only public port
     volumes:
-      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../gateway/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - next-app
       - market-ingestor
@@ -68,13 +66,13 @@ services:
     environment:
       - FINNHUB_API_KEY=${FINNHUB_API_KEY}
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}          
-      - KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      - DATABASE_URL: postgresql://quant_user:quant_password@postgres:5432/quant_platform
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DATABASE_URL=postgresql://quant_user:quant_password@postgres:5432/quant_platform
     depends_on:
       - kafka
       - postgres
-    # ports:
-    #   - "8001:8001"
+    ports:
+      - "8001:8001"
 
   # News Ingestor Service (Alpha Vantage News Sentiment)
   news-ingestor:
@@ -84,8 +82,8 @@ services:
     environment:
       - FINNHUB_API_KEY=${FINNHUB_API_KEY}
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}      
-      - KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      - DATABASE_URL: postgresql://quant_user:quant_password@postgres:5432/quant_platform
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DATABASE_URL=postgresql://quant_user:quant_password@postgres:5432/quant_platform
     depends_on:
       - kafka
       - postgres
@@ -99,15 +97,15 @@ services:
       dockerfile: Dockerfile.quant-engine
     environment:
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}      
-      - KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      - DATABASE_URL: postgresql://quant_user:quant_password@postgres:5432/quant_platform
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - DATABASE_URL=postgresql://quant_user:quant_password@postgres:5432/quant_platform
     depends_on:
       - kafka
       - postgres
       - market-ingestor
       - news-ingestor
-    # ports:
-    #   - "8003:8003"
+    ports:
+      - "8003:8003"
 
   # Redis for caching
   redis:

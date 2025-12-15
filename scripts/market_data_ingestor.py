@@ -9,7 +9,7 @@ import json
 import os
 import httpx
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from fastapi import FastAPI, WebSocket, HTTPException, Query
 from pydantic import BaseModel
 
@@ -104,7 +104,7 @@ async def fetch_alpha_vantage_quote(client: httpx.AsyncClient, symbol: str) -> O
         print(f"[AlphaVantage] Error: {e}")
         return None
 
-@app.get("/api/v1/quotes", response_model=Dict[str, list])
+@app.get("/api/v1/quotes", response_model=Dict[str, List[MarketDataPoint]])
 async def get_bulk_quotes(symbols: str = Query(..., description="Comma-separated symbols")):
     """Get latest quotes for multiple symbols"""
     symbol_list = [s.strip().upper() for s in symbols.split(",")]
@@ -113,12 +113,12 @@ async def get_bulk_quotes(symbols: str = Query(..., description="Comma-separated
     async with httpx.AsyncClient() as client:
         # Create tasks for parallel execution
         tasks = [get_quote(symbol) for symbol in symbol_list]
+        # Return exceptions=True so one failure doesn't break the whole batch
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         for res in results:
             if isinstance(res, MarketDataPoint):
                 quotes.append(res)
-            # Ignore errors for individual symbols in bulk fetch
             
     return {"quotes": quotes}
     
@@ -138,8 +138,9 @@ async def get_quote(symbol: str):
         
         # Fallback to Alpha Vantage
         if not data:
+            print(f"Falling back to Alpha Vantage for {symbol}")
             data = await fetch_alpha_vantage_quote(client, symbol)
-            
+
         if not data:
             raise HTTPException(status_code=404, detail="Symbol not found or API limits reached")
 

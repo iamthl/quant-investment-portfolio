@@ -23,13 +23,13 @@ alembic==1.13.1
 # FinBERT and ML
 transformers==4.37.0
 torch==2.1.2
-numpy==1.26.3
-pandas==2.1.4
-scikit-learn==1.4.0
+numpy
+pandas
+scikit-learn
 
 # Technical Analysis
 ta==0.11.0
-pandas-ta==0.3.14b
+pandas-ta-classic==0.3.59
 
 # Data validation
 pydantic==2.5.3

@@ -509,7 +509,6 @@ async def get_trading_signal(symbol: str):
 async def get_recent_signals(limit: int = 10):
     """Get recent generated trading signals"""
     # In a real app, this would query the database/kafka store
-    # Returning mock data for demonstration matching frontend expectation
     mock_signals = [
         TradingSignal(
             symbol="BTC/USD", action="BUY", entry_price=43250, stop_loss=41500, 
