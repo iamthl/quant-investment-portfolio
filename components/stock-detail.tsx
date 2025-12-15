@@ -75,6 +75,10 @@ export function StockDetail({ symbol }: StockDetailProps) {
           if (data.bars && Array.isArray(data.bars)) {
             setHistoricalData(data.bars)
           }
+        } else {
+          // Handle the error gracefully (e.g. limit reached)
+          console.warn("API Limit or Error:", response.statusText)
+          setHistoricalData([])
         }
       } catch (error) {
         console.error("Failed to load historical data", error)
@@ -222,8 +226,8 @@ export function StockDetail({ symbol }: StockDetailProps) {
                           <AreaChart data={historicalData}>
                             <defs>
                               <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
-                                <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                                <stop offset="0%" stopColor="#10b981" stopOpacity={0.3} />
+                                <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                               </linearGradient>
                             </defs>
                             <XAxis
@@ -249,7 +253,7 @@ export function StockDetail({ symbol }: StockDetailProps) {
                             <Area
                               type="monotone"
                               dataKey="price"
-                              stroke="hsl(var(--primary))"
+                              stroke="#10b981"
                               strokeWidth={2}
                               fill="url(#priceGradient)"
                             />
