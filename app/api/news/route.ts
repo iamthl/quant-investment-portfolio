@@ -23,7 +23,8 @@ const CACHE_TTL = 300000 // 5 minutes cache
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const tickers = searchParams.get("symbols") || "AAPL,NVDA,TSLA"
+  
+  const tickers = searchParams.get("tickers") || searchParams.get("symbols") || "AAPL,NVDA,TSLA"
   const limit = Number.parseInt(searchParams.get("limit") || "10")
   const topics = searchParams.get("topics") || "technology,earnings"
 
@@ -42,12 +43,25 @@ export async function GET(request: Request) {
 
     const articles = await fetchAlphaVantageNews(tickers, topics, limit)
 
-    if (articles.length > 0) {
-      newsCache.set(cacheKey, { data: articles, timestamp: Date.now() })
+    const requestedSymbols = tickers.split(",").map((s) => s.trim().toUpperCase())
+    
+    const filteredArticles = articles.filter((article) => {
+      const hasSymbol = article.symbols.some((s) => requestedSymbols.includes(s))
+      
+      const hasHeadlineMatch = requestedSymbols.some((s) => 
+        article.headline.toUpperCase().includes(s) || 
+        article.summary.toUpperCase().includes(s)
+      )
+
+      return hasSymbol || hasHeadlineMatch
+    })
+
+    if (filteredArticles.length > 0) {
+      newsCache.set(cacheKey, { data: filteredArticles, timestamp: Date.now() })
     }
 
     return NextResponse.json({
-      articles,
+      articles: filteredArticles,
       source: "alpha_vantage",
       timestamp: new Date().toISOString(),
     })
@@ -67,12 +81,11 @@ export async function GET(request: Request) {
 
 async function fetchAlphaVantageNews(tickers: string, topics: string, limit: number): Promise<NewsArticle[]> {
   try {
-    // Alpha Vantage News Sentiment API
     const url = new URL(ALPHA_VANTAGE_BASE_URL)
     url.searchParams.set("function", "NEWS_SENTIMENT")
     url.searchParams.set("tickers", tickers)
     url.searchParams.set("topics", topics)
-    url.searchParams.set("limit", String(Math.min(limit, 50)))
+    url.searchParams.set("limit", String(Math.min(limit + 5, 50)))
     url.searchParams.set("apikey", ALPHA_VANTAGE_API_KEY)
 
     const response = await fetch(url.toString(), { next: { revalidate: 300 } })
@@ -83,7 +96,6 @@ async function fetchAlphaVantageNews(tickers: string, topics: string, limit: num
 
     const data = await response.json()
 
-    // Check for API limit message
     if (data["Note"] || data["Information"]) {
       console.warn("[Alpha Vantage News] Rate limit:", data["Note"] || data["Information"])
       return []
@@ -95,11 +107,9 @@ async function fetchAlphaVantageNews(tickers: string, topics: string, limit: num
     }
 
     return feed.map((item: any, idx: number) => {
-      // Get overall sentiment
       const overallSentiment = item.overall_sentiment_score || 0
       const sentimentLabel = getSentimentLabel(overallSentiment)
 
-      // Get ticker-specific sentiment if available
       const tickerSentiment = item.ticker_sentiment || []
       const symbols = tickerSentiment.map((ts: any) => ts.ticker)
       const relevanceScore = tickerSentiment[0]?.relevance_score
@@ -113,7 +123,7 @@ async function fetchAlphaVantageNews(tickers: string, topics: string, limit: num
         source: item.source || "Unknown",
         url: item.url || "#",
         publishedAt: formatAlphaVantageDate(item.time_published),
-        symbols,
+        symbols, 
         sentimentScore: Number.parseFloat(overallSentiment.toFixed(3)),
         sentimentLabel,
         relevanceScore,
@@ -135,9 +145,7 @@ function getSentimentLabel(score: number): NewsArticle["sentimentLabel"] {
 }
 
 function formatAlphaVantageDate(dateStr: string): string {
-  // Alpha Vantage format: "20231215T143000"
   if (!dateStr) return new Date().toISOString()
-
   try {
     const year = dateStr.substring(0, 4)
     const month = dateStr.substring(4, 6)
@@ -145,7 +153,6 @@ function formatAlphaVantageDate(dateStr: string): string {
     const hour = dateStr.substring(9, 11)
     const minute = dateStr.substring(11, 13)
     const second = dateStr.substring(13, 15)
-
     return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`).toISOString()
   } catch {
     return new Date().toISOString()
