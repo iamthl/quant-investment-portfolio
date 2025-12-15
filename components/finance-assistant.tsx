@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { MessageCircle, X, Send, Bot, User, Sparkles, BookOpen, Loader2 } from "lucide-react"
 
 interface Message {
@@ -34,13 +33,27 @@ export function FinanceAssistant() {
   ])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    scrollToBottom()
+  }, [messages, isLoading])
+
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => {
+        inputRef.current?.focus()
+        scrollToBottom()
+      }, 100)
     }
-  }, [messages])
+  }, [isOpen])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -55,6 +68,9 @@ export function FinanceAssistant() {
     setMessages((prev) => [...prev, userMessage])
     setInput("")
     setIsLoading(true)
+
+    // Keep focus on input
+    setTimeout(() => inputRef.current?.focus(), 0)
 
     try {
       const response = await fetch("/api/finance-assistant", {
@@ -81,11 +97,13 @@ export function FinanceAssistant() {
       setMessages((prev) => [...prev, errorMessage])
     } finally {
       setIsLoading(false)
+      setTimeout(() => inputRef.current?.focus(), 100)
     }
   }
 
   const handleQuickQuestion = (question: string) => {
     setInput(question)
+    inputRef.current?.focus()
   }
 
   return (
@@ -93,14 +111,14 @@ export function FinanceAssistant() {
       {/* Floating Button */}
       <Button
         onClick={() => setIsOpen(true)}
-        className={`fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg bg-primary hover:bg-primary/90 z-50 ${isOpen ? "hidden" : ""}`}
+        className={`fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg bg-primary hover:bg-primary/90 z-50 transition-all duration-200 ${isOpen ? "scale-0 opacity-0" : "scale-100 opacity-100"}`}
       >
         <MessageCircle className="h-6 w-6" />
       </Button>
 
       {/* Chat Panel */}
       {isOpen && (
-        <Card className="fixed bottom-6 right-6 w-[400px] h-[600px] shadow-2xl border-border bg-card z-50 flex flex-col">
+        <Card className="fixed bottom-6 right-6 w-[90vw] md:w-[400px] h-[600px] max-h-[80vh] shadow-2xl border-border bg-card z-50 flex flex-col animate-in fade-in slide-in-from-bottom-5 duration-200">
           <CardHeader className="flex flex-row items-center justify-between border-b border-border pb-4 shrink-0">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/20">
@@ -120,48 +138,46 @@ export function FinanceAssistant() {
           </CardHeader>
 
           <CardContent className="flex-1 flex flex-col p-0 overflow-hidden">
-            {/* Messages */}
-            <ScrollArea className="flex-1 p-4" ref={scrollRef}>
-              <div className="space-y-4">
-                {messages.map((message) => (
-                  <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : ""}`}>
-                    <div
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                        message.role === "user" ? "bg-primary" : "bg-secondary"
-                      }`}
-                    >
-                      {message.role === "user" ? (
-                        <User className="h-4 w-4 text-primary-foreground" />
-                      ) : (
-                        <Bot className="h-4 w-4 text-primary" />
-                      )}
-                    </div>
-                    <div
-                      className={`rounded-lg p-3 max-w-[85%] ${
-                        message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-secondary/50 border border-border"
-                      }`}
-                    >
-                      <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                    </div>
-                  </div>
-                ))}
-                {isLoading && (
-                  <div className="flex gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary">
+            <div className="flex-1 p-4 overflow-y-auto space-y-4">
+              {messages.map((message) => (
+                <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : ""}`}>
+                  <div
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                      message.role === "user" ? "bg-primary" : "bg-secondary"
+                    }`}
+                  >
+                    {message.role === "user" ? (
+                      <User className="h-4 w-4 text-primary-foreground" />
+                    ) : (
                       <Bot className="h-4 w-4 text-primary" />
-                    </div>
-                    <div className="rounded-lg p-3 bg-secondary/50 border border-border">
-                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    </div>
+                    )}
                   </div>
-                )}
-              </div>
-            </ScrollArea>
+                  <div
+                    className={`rounded-lg p-3 max-w-[85%] ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-secondary/50 border border-border"
+                    }`}
+                  >
+                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+                  </div>
+                </div>
+              ))}
+              {isLoading && (
+                <div className="flex gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary">
+                    <Bot className="h-4 w-4 text-primary" />
+                  </div>
+                  <div className="rounded-lg p-3 bg-secondary/50 border border-border">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} className="h-px w-full" />
+            </div>
 
             {/* Quick Questions */}
-            <div className="px-4 py-2 border-t border-border bg-secondary/30">
+            <div className="px-4 py-2 border-t border-border bg-secondary/30 shrink-0">
               <div className="flex items-center gap-1 mb-2">
                 <BookOpen className="h-3 w-3 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">Quick questions:</span>
@@ -171,7 +187,7 @@ export function FinanceAssistant() {
                   <Badge
                     key={term}
                     variant="outline"
-                    className="cursor-pointer hover:bg-primary/20 hover:border-primary text-[10px]"
+                    className="cursor-pointer hover:bg-primary/20 hover:border-primary text-[10px] transition-colors"
                     onClick={() => handleQuickQuestion(term)}
                   >
                     {term}
@@ -181,9 +197,10 @@ export function FinanceAssistant() {
             </div>
 
             {/* Input */}
-            <form onSubmit={handleSubmit} className="p-4 border-t border-border shrink-0">
+            <form onSubmit={handleSubmit} className="p-4 border-t border-border shrink-0 bg-background">
               <div className="flex gap-2">
                 <Input
+                  ref={inputRef}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   placeholder="Ask about any finance term..."
