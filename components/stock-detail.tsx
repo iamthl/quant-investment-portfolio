@@ -234,13 +234,13 @@ export function StockDetail({ symbol }: StockDetailProps) {
                               dataKey="date"
                               axisLine={false}
                               tickLine={false}
-                              tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                              tick={{ fill: "#ffffff", fontSize: 12 }}
                             />
                             <YAxis
                               axisLine={false}
                               tickLine={false}
                               domain={['auto', 'auto']}
-                              tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                              tick={{ fill: "#ffffff", fontSize: 12 }}
                               tickFormatter={(v) => `$${v.toFixed(0)}`}
                             />
                             <Tooltip
@@ -267,12 +267,12 @@ export function StockDetail({ symbol }: StockDetailProps) {
                               dataKey="date"
                               axisLine={false}
                               tickLine={false}
-                              tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                              tick={{ fill: "#ffffff", fontSize: 12 }}
                             />
                             <YAxis
                               axisLine={false}
                               tickLine={false}
-                              tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                              tick={{ fill: "#ffffff", fontSize: 12 }}
                               tickFormatter={(v) => formatVolume(v)}
                             />
                             <Tooltip
@@ -282,7 +282,7 @@ export function StockDetail({ symbol }: StockDetailProps) {
                                 borderRadius: "8px",
                               }}
                             />
-                            <Bar dataKey="volume" fill="hsl(var(--primary))" opacity={0.8} radius={[4, 4, 0, 0]} />
+                            <Bar dataKey="volume" fill="#10b981" opacity={0.8} radius={[4, 4, 0, 0]} />
                           </BarChart>
                         </ResponsiveContainer>
                       </TabsContent>
