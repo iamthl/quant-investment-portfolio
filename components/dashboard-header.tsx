@@ -9,6 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { TrendingUp, Search, Bell, Settings, User, ChevronDown, Zap } from "lucide-react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
+import { signOut } from "next-auth/react"
 
 export function DashboardHeader() {
   const [notifications] = useState(3)
@@ -117,7 +118,7 @@ export function DashboardHeader() {
                 <DropdownMenuItem>Profile</DropdownMenuItem>
                 <DropdownMenuItem>Settings</DropdownMenuItem>
                 <DropdownMenuItem>API Keys</DropdownMenuItem>
-                <DropdownMenuItem className="text-primary">Sign Out</DropdownMenuItem>
+                <DropdownMenuItem className="text-primary" onClick={() => signOut({ callbackUrl: "/login" })}>Sign Out</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

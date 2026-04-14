@@ -83,7 +83,7 @@ def format_alpha_vantage_date(date_str: str) -> str:
         return datetime.utcnow().isoformat()
 
 # Enhanced FinBERT-style sentiment analysis
-def analyze_sentiment_finbert(text: str) -> SentimentResult:
+def analyse_sentiment_finbert(text: str) -> SentimentResult:
     """
     Enhanced FinBERT-style sentiment analysis.
     In production, use: from transformers import AutoModelForSequenceClassification
@@ -293,7 +293,7 @@ async def get_news_by_topic(
 @app.post("/api/v1/analyze-sentiment")
 async def analyze_text_sentiment(text: str):
     """Analyze sentiment of custom text using FinBERT-style analysis"""
-    result = analyze_sentiment_finbert(text)
+    result = analyse_sentiment_finbert(text)
     return result.model_dump()
 
 @app.get("/api/v1/sentiment-aggregate/{ticker}")
