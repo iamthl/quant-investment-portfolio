@@ -44,7 +44,7 @@ async def startup():
 async def shutdown():
     await database.disconnect()
 
-# ── Data Models ──────────────────────────────────────────────────────────────
+# Data Models 
 
 class TechnicalIndicators(BaseModel):
     symbol: str
@@ -150,7 +150,7 @@ async def get_quant_insights(symbols: str = Query("AAPL,NVDA,MSFT")):
         for symbol in symbol_list[:5]:
             try:
                 # Fetch data & Prediction
-                df = await fetch_historical_ohlcv(symbol, outputsize="compact")
+                df = await fetch_historical_ohlcv(symbol, db=database, outputsize="compact")
                 prediction = model.predict(df, symbol)
                 tech_score = prediction.technical_score
                 
@@ -202,7 +202,7 @@ async def get_quant_insights(symbols: str = Query("AAPL,NVDA,MSFT")):
                 )
                 insights.append(insight)
                 await publish_to_kafka(KAFKA_TOPIC_QUANT_INSIGHTS, insight.model_dump())
-                await asyncio.sleep(1)
+                await asyncio.sleep(12)
                 
             except Exception as e:
                 logging.error(f"Error processing {symbol}: {str(e)}")

@@ -141,11 +141,27 @@ FEATURE_COLS = [
 
 # Alpha Vantage data loader
 
-async def fetch_historical_ohlcv(symbol: str, outputsize: str = "full") -> pd.DataFrame:
-    """
-    Download daily OHLCV from Alpha Vantage TIME_SERIES_DAILY.
-    Returns a DataFrame with columns: open, high, low, close, volume.
-    """
+async def fetch_historical_ohlcv(symbol: str, db=None, outputsize: str = "compact") -> pd.DataFrame:
+    """ Checks the local database cache first. If data is missing or older than 24h,
+    it fetches from Alpha Vantage and updates the cache."""
+    # Attempt to fetch from the local TimescaleDB cache
+    if db:
+        query = """
+            SELECT timestamp as date, open, high, low, price as close, volume 
+            FROM market_data 
+            WHERE symbol = :symbol AND source = 'alpha_vantage_cache'
+            ORDER BY timestamp DESC LIMIT 100
+        """
+        rows = await db.fetch_all(query=query, values={"symbol": symbol})
+        
+        if rows:
+            df_cache = pd.DataFrame([dict(r) for r in rows]).set_index("date").sort_index()
+            # Determine freshness (is the latest bar from today?)
+            last_bar_time = df_cache.index.max()
+            if (datetime.utcnow() - last_bar_time.to_pydatetime().replace(tzinfo=None)).total_seconds() < 86400:
+                return df_cache
+
+    # Cache Miss: Fetch from Alpha Vantage
     url = "https://www.alphavantage.co/query"
     params = {
         "function": "TIME_SERIES_DAILY",
@@ -156,25 +172,45 @@ async def fetch_historical_ohlcv(symbol: str, outputsize: str = "full") -> pd.Da
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url, params=params)
-        resp.raise_for_status()
         data = resp.json()
 
-    ts = data.get("Time Series (Daily)", {})
-    if not ts:
-        raise ValueError(f"No data returned for {symbol}: {data.get('Note', data.get('Information', 'unknown error'))}")
+    # Handle AV Rate Limit Note
+    if "Note" in data or "Information" in data:
+        logger.warning(f"Alpha Vantage Rate Limit Hit for {symbol}")
+        # If have ANY cached data (even if slightly stale), return it rather than crashing
+        if db and rows: return pd.DataFrame([dict(r) for r in rows]).set_index("date").sort_index()
+        raise HTTPException(status_code=429, detail="Upstream Rate Limit")
 
-    rows = []
+    ts = data.get("Time Series (Daily)", {})
+    rows_to_insert = []
+    
+    # Process and prepare for DB save
     for date_str, v in ts.items():
-        rows.append({
-            "date":   pd.to_datetime(date_str),
-            "open":   float(v["1. open"]),
-            "high":   float(v["2. high"]),
-            "low":    float(v["3. low"]),
-            "close":  float(v["4. close"]),
+        rows_to_insert.append({
+            "date": pd.to_datetime(date_str),
+            "open": float(v["1. open"]),
+            "high": float(v["2. high"]),
+            "low": float(v["3. low"]),
+            "close": float(v["4. close"]),
             "volume": float(v["5. volume"]),
         })
 
-    df = pd.DataFrame(rows).set_index("date").sort_index()
+    df = pd.DataFrame(rows_to_insert).set_index("date").sort_index()
+
+    # Save to DB for future use (upsert logic)
+    if db and not df.empty:
+        insert_query = """
+            INSERT INTO market_data (symbol, open, high, low, price, volume, timestamp, source)
+            VALUES (:symbol, :open, :high, :low, :close, :volume, :ts, 'alpha_vantage_cache')
+            ON CONFLICT DO NOTHING
+        """
+        for timestamp, row in df.tail(100).iterrows():
+            await db.execute(insert_query, {
+                "symbol": symbol, "open": row['open'], "high": row['high'], 
+                "low": row['low'], "close": row['close'], "volume": row['volume'],
+                "ts": timestamp
+            })
+
     return df
 
 
