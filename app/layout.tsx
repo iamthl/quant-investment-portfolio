@@ -7,11 +7,9 @@ import "./globals.css"
 const _geist = Geist({ subsets: ["latin"] })
 const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
-// <CHANGE> Updated metadata for quant trading platform
 export const metadata: Metadata = {
-  title: "QuantAI | AI-Powered Asset Management",
+  title: "QuantAI | Quant Investment Portfolio",
   description: "Advanced quantitative trading platform powered by artificial intelligence",
-    generator: 'v0.app'
 }
 
 export default function RootLayout({

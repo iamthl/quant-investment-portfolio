@@ -13,6 +13,9 @@ interface TradingSignal {
   sentimentScore: number
   riskReward: number
   timestamp: string
+  probabilityIncrease?: number
+  featureImportances?: Record<string, number>
+  modelType: string
 }
 
 const signalsData: Omit<TradingSignal, "timestamp">[] = [
@@ -24,10 +27,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 43250,
     targetPrice: 48000,
     stopLoss: 41500,
-    reasoning: "Strong momentum indicators + ETF inflows driving bullish divergence on RSI",
+    reasoning: "ML Model predicts 82% chance of increase driven by RSI divergence and ETF inflows.",
     technicalScore: 88,
     sentimentScore: 92,
     riskReward: 2.71,
+    probabilityIncrease: 0.824,
+    modelType: "gradient_boosting",
+    featureImportances: { "rsi_14": 0.35, "momentum_20": 0.25, "vol_trend": 0.15 }
   },
   {
     id: 2,
@@ -37,10 +43,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 2280,
     targetPrice: 2450,
     stopLoss: 2150,
-    reasoning: "Consolidation phase - waiting for breakout confirmation above resistance",
+    reasoning: "Consolidation phase - waiting for ML confirmation above resistance.",
     technicalScore: 55,
     sentimentScore: 62,
     riskReward: 1.31,
+    probabilityIncrease: 0.521,
+    modelType: "xgboost",
+    featureImportances: { "sma_50_ratio": 0.42, "bb_pct": 0.18 }
   },
   {
     id: 3,
@@ -50,10 +59,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 485.2,
     targetPrice: 550,
     stopLoss: 460,
-    reasoning: "AI sector momentum strong + New chip announcement driving upgrades",
+    reasoning: "High probability AI sector momentum confirmed by Gradient Boosting model.",
     technicalScore: 85,
     sentimentScore: 95,
     riskReward: 2.57,
+    probabilityIncrease: 0.895,
+    modelType: "gradient_boosting",
+    featureImportances: { "ret_5d": 0.38, "vol_ratio_20": 0.22, "macd_hist": 0.12 }
   },
   {
     id: 4,
@@ -63,10 +75,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 98.5,
     targetPrice: 85,
     stopLoss: 105,
-    reasoning: "Network concerns + Technical breakdown below key support levels",
+    reasoning: "ML features indicate strong downward momentum and technical breakdown.",
     technicalScore: 35,
     sentimentScore: 28,
     riskReward: 2.08,
+    probabilityIncrease: 0.284,
+    modelType: "xgboost",
+    featureImportances: { "rsi_14": 0.45, "stoch_k": 0.25 }
   },
   {
     id: 5,
@@ -76,10 +91,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 178.5,
     targetPrice: 190,
     stopLoss: 170,
-    reasoning: "Stable technicals but mixed sentiment on iPhone demand outlook",
+    reasoning: "Stable technicals but mixed sentiment; ML model at neutral 0.5 probability.",
     technicalScore: 62,
     sentimentScore: 48,
     riskReward: 1.35,
+    probabilityIncrease: 0.498,
+    modelType: "gradient_boosting",
+    featureImportances: { "atr_14_pct": 0.31, "sma_20_ratio": 0.19 }
   },
   {
     id: 6,
@@ -89,10 +107,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 378.65,
     targetPrice: 420,
     stopLoss: 360,
-    reasoning: "Azure growth acceleration + Enterprise AI adoption driving momentum",
+    reasoning: "Azure growth acceleration confirmed by bullish MACD histogram features.",
     technicalScore: 68,
     sentimentScore: 75,
     riskReward: 2.22,
+    probabilityIncrease: 0.762,
+    modelType: "gradient_boosting",
+    featureImportances: { "macd_hist": 0.41, "ret_10d": 0.15 }
   },
   {
     id: 7,
@@ -102,10 +123,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 142.5,
     targetPrice: 165,
     stopLoss: 135,
-    reasoning: "Gemini AI momentum + Search advertising resilience beating expectations",
+    reasoning: "Gemini AI momentum driving upgrades; strong ML probability of 5-day rise.",
     technicalScore: 78,
     sentimentScore: 85,
     riskReward: 3.0,
+    probabilityIncrease: 0.815,
+    modelType: "xgboost",
+    featureImportances: { "ret_3d": 0.34, "rsi_14": 0.22 }
   },
   {
     id: 8,
@@ -115,10 +139,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 505.3,
     targetPrice: 580,
     stopLoss: 475,
-    reasoning: "Reels monetization improving + Cost discipline driving margins higher",
+    reasoning: "Reels monetization improving + technical breakout features.",
     technicalScore: 74,
     sentimentScore: 81,
     riskReward: 2.47,
+    probabilityIncrease: 0.789,
+    modelType: "gradient_boosting",
+    featureImportances: { "bb_pct": 0.29, "vol_trend": 0.18 }
   },
   {
     id: 9,
@@ -128,10 +155,13 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 248.5,
     targetPrice: 280,
     stopLoss: 220,
-    reasoning: "Mixed signals - EV competition intense but energy storage growing fast",
+    reasoning: "Volatility features high; model recommends holding for clearer direction.",
     technicalScore: 48,
     sentimentScore: 55,
     riskReward: 1.11,
+    probabilityIncrease: 0.512,
+    modelType: "gradient_boosting",
+    featureImportances: { "atr_14_pct": 0.52 }
   },
   {
     id: 10,
@@ -141,141 +171,14 @@ const signalsData: Omit<TradingSignal, "timestamp">[] = [
     currentPrice: 178.2,
     targetPrice: 210,
     stopLoss: 165,
-    reasoning: "MI300 AI chip demand exceeding forecasts + Data center market share gains",
+    reasoning: "MI300 AI chip demand exceeding forecasts; strong stochastics signal.",
     technicalScore: 82,
     sentimentScore: 88,
     riskReward: 2.41,
-  },
-  {
-    id: 11,
-    asset: "AMZN",
-    action: "BUY",
-    confidence: 77,
-    currentPrice: 185.4,
-    targetPrice: 210,
-    stopLoss: 172,
-    reasoning: "AWS growth reaccelerating + Prime Day results strong retail momentum",
-    technicalScore: 72,
-    sentimentScore: 80,
-    riskReward: 1.84,
-  },
-  {
-    id: 12,
-    asset: "JPM",
-    action: "HOLD",
-    confidence: 61,
-    currentPrice: 198.75,
-    targetPrice: 215,
-    stopLoss: 185,
-    reasoning: "Strong trading revenue offset by commercial real estate concerns",
-    technicalScore: 58,
-    sentimentScore: 64,
-    riskReward: 1.18,
-  },
-  {
-    id: 13,
-    asset: "XRP/USD",
-    action: "BUY",
-    confidence: 68,
-    currentPrice: 0.62,
-    targetPrice: 0.85,
-    stopLoss: 0.55,
-    reasoning: "Legal clarity improving + Institutional adoption increasing",
-    technicalScore: 65,
-    sentimentScore: 70,
-    riskReward: 3.29,
-  },
-  {
-    id: 14,
-    asset: "V",
-    action: "BUY",
-    confidence: 73,
-    currentPrice: 275.6,
-    targetPrice: 305,
-    stopLoss: 260,
-    reasoning: "Cross-border travel recovery + Digital payment penetration accelerating",
-    technicalScore: 70,
-    sentimentScore: 76,
-    riskReward: 1.89,
-  },
-  {
-    id: 15,
-    asset: "CRM",
-    action: "BUY",
-    confidence: 71,
-    currentPrice: 265.8,
-    targetPrice: 300,
-    stopLoss: 250,
-    reasoning: "Einstein AI integration driving enterprise upgrades + Strong cash flow",
-    technicalScore: 68,
-    sentimentScore: 74,
-    riskReward: 2.16,
-  },
-  {
-    id: 16,
-    asset: "INTC",
-    action: "SELL",
-    confidence: 69,
-    currentPrice: 31.5,
-    targetPrice: 25,
-    stopLoss: 35,
-    reasoning: "Foundry losses mounting + Market share erosion to AMD and ARM",
-    technicalScore: 32,
-    sentimentScore: 28,
-    riskReward: 1.86,
-  },
-  {
-    id: 17,
-    asset: "BA",
-    action: "HOLD",
-    confidence: 48,
-    currentPrice: 178.2,
-    targetPrice: 200,
-    stopLoss: 160,
-    reasoning: "Production ramp challenges offset by strong backlog and defense orders",
-    technicalScore: 45,
-    sentimentScore: 50,
-    riskReward: 1.2,
-  },
-  {
-    id: 18,
-    asset: "DOGE/USD",
-    action: "HOLD",
-    confidence: 45,
-    currentPrice: 0.082,
-    targetPrice: 0.1,
-    stopLoss: 0.07,
-    reasoning: "Meme momentum fading but utility developments underway",
-    technicalScore: 42,
-    sentimentScore: 48,
-    riskReward: 1.5,
-  },
-  {
-    id: 19,
-    asset: "DIS",
-    action: "BUY",
-    confidence: 66,
-    currentPrice: 112.4,
-    targetPrice: 130,
-    stopLoss: 102,
-    reasoning: "Streaming losses narrowing + Parks revenue at all-time highs",
-    technicalScore: 62,
-    sentimentScore: 68,
-    riskReward: 1.69,
-  },
-  {
-    id: 20,
-    asset: "NFLX",
-    action: "BUY",
-    confidence: 74,
-    currentPrice: 628.5,
-    targetPrice: 720,
-    stopLoss: 580,
-    reasoning: "Ad-tier momentum + Password crackdown driving subscriber growth",
-    technicalScore: 71,
-    sentimentScore: 77,
-    riskReward: 1.89,
-  },
+    probabilityIncrease: 0.842,
+    modelType: "xgboost",
+    featureImportances: { "stoch_k": 0.39, "ret_5d": 0.21 }
+  }
 ]
 
 export async function GET(request: Request) {
@@ -294,10 +197,15 @@ export async function GET(request: Request) {
     signals = signals.filter((s) => s.asset.toLowerCase().includes(symbol.toLowerCase()))
   }
 
-  // Add variance to make it feel live
+  // Add variance to make it feel live and incorporate ML probabilities
   const liveSignals: TradingSignal[] = signals.slice(0, limit).map((signal) => {
     const priceVariance = signal.currentPrice * 0.002 * (Math.random() - 0.5)
     const confVariance = Math.floor(Math.random() * 4) - 2
+    
+    // Simulate live probability drift if present
+    const probVariance = signal.probabilityIncrease 
+      ? Math.max(0, Math.min(1, signal.probabilityIncrease + (Math.random() * 0.02 - 0.01)))
+      : undefined
 
     return {
       ...signal,
@@ -305,6 +213,7 @@ export async function GET(request: Request) {
       confidence: Math.max(50, Math.min(99, signal.confidence + confVariance)),
       technicalScore: Math.max(0, Math.min(100, signal.technicalScore + Math.floor(Math.random() * 6) - 3)),
       sentimentScore: Math.max(0, Math.min(100, signal.sentimentScore + Math.floor(Math.random() * 6) - 3)),
+      probabilityIncrease: probVariance,
       timestamp: new Date().toISOString(),
     }
   })

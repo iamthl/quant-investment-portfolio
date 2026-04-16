@@ -22,6 +22,9 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost/api # Points to Gateway
       - NEXT_PUBLIC_WS_URL=ws://localhost/ws     # Points to Gateway
+      - DATABASE_URL=postgresql://quant_user:quant_password@postgres:5432/quant_platform
+    depends_on:
+      - postgres
 
   # Apache Kafka + Zookeeper
   zookeeper:
@@ -68,9 +71,11 @@ services:
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}          
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - DATABASE_URL=postgresql://quant_user:quant_password@postgres:5432/quant_platform
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - kafka
       - postgres
+      - redis
     ports:
       - "8001:8001"
 
@@ -99,11 +104,14 @@ services:
       - ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}      
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - DATABASE_URL=postgresql://quant_user:quant_password@postgres:5432/quant_platform
+      - REDIS_URL=redis://redis:6379
     depends_on:
       - kafka
       - postgres
       - market-ingestor
       - news-ingestor
+    volumes:
+      - quant_models:/tmp
     ports:
       - "8003:8003"
 
@@ -126,3 +134,4 @@ services:
 
 volumes:
   postgres_data:
+  quant_models:

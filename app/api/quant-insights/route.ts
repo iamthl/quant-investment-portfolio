@@ -12,6 +12,9 @@ interface QuantInsight {
   sentimentFactors: string[]
   riskLevel: "LOW" | "MEDIUM" | "HIGH"
   timestamp: string
+  probabilityIncrease?: number
+  featureImportances?: Record<string, number>
+  modelType?: string
 }
 
 interface TechnicalIndicators {
@@ -75,6 +78,9 @@ const insightsData: Record<string, Omit<QuantInsight, "timestamp">> = {
     technicalFactors: ["RSI above 60", "MACD bullish crossover", "ADX strong trend", "Above 50-day MA"],
     sentimentFactors: ["ETF approval news", "Institutional buying", "Positive earnings outlook"],
     riskLevel: "LOW",
+    probabilityIncrease: 0.82,
+    featureImportances: { "rsi_14": 0.45, "macd_hist": 0.30, "vol_trend": 0.25 },
+    modelType: "XGBoost v2.1"
   },
   NVDA: {
     symbol: "NVDA",
@@ -87,6 +93,9 @@ const insightsData: Record<string, Omit<QuantInsight, "timestamp">> = {
     technicalFactors: ["Above 50 MA", "Volume breakout", "Support holding", "RSI healthy"],
     sentimentFactors: ["New AI chip launch", "Analyst upgrades", "AI demand growth"],
     riskLevel: "LOW",
+    probabilityIncrease: 0.82,
+    featureImportances: { "rsi_14": 0.45, "macd_hist": 0.30, "vol_trend": 0.25 },
+    modelType: "XGBoost v2.1"
   },
   SOL: {
     symbol: "SOL",
@@ -99,6 +108,9 @@ const insightsData: Record<string, Omit<QuantInsight, "timestamp">> = {
     technicalFactors: ["Below 20 MA", "RSI oversold", "Volume declining", "Support broken"],
     sentimentFactors: ["Network outage news", "Developer concerns", "Competition pressure"],
     riskLevel: "HIGH",
+    probabilityIncrease: 0.28,
+    featureImportances: { "rsi_14": 0.60, "stoch_k": 0.25, "atr_14_pct": 0.15 },
+    modelType: "XGBoost v2.1"
   },
   ETH: {
     symbol: "ETH",
@@ -111,6 +123,9 @@ const insightsData: Record<string, Omit<QuantInsight, "timestamp">> = {
     technicalFactors: ["Range-bound", "Neutral RSI", "Low volatility", "Testing resistance"],
     sentimentFactors: ["Mixed staking sentiment", "L2 adoption positive", "Gas fees stable"],
     riskLevel: "MEDIUM",
+    probabilityIncrease: 0.52,
+    featureImportances: { "bb_width": 0.40, "macd_signal": 0.35, "rsi_14": 0.25 },
+    modelType: "Gradient Boosting"
   },
   AAPL: {
     symbol: "AAPL",
@@ -183,7 +198,7 @@ export async function GET(request: Request) {
       technicalScore: adjustedTech,
       sentimentScore: adjustedSent,
       fusedScore: adjustedFused,
-      action: determineAction(adjustedFused),
+      action: (adjustedFused >= 65 ? "BUY" : adjustedFused <= 35 ? "SELL" : "HOLD") as any,      
       timestamp: new Date().toISOString(),
     }
   })

@@ -45,3 +45,17 @@ model Session {
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
+
+model AIPrediction {
+  id                  String   @id @default(cuid())
+  symbol              String
+  probabilityIncrease Float    
+  confidence          Float
+  action              String
+  modelType           String
+  featureImportances  Json?
+  timestamp           DateTime @default(now())
+
+  @@index([symbol])
+  @@index([timestamp])
+}
