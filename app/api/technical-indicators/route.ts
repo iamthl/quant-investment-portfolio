@@ -3,6 +3,8 @@ import { NextResponse } from "next/server"
 const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY
 const ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
 
+const CRYPTO_SYMBOLS = new Set(["BTC", "ETH", "SOL", "BNB", "XRP", "ADA", "DOGE", "AVAX", "MATIC", "DOT", "LINK", "LTC"])
+
 interface TechnicalData {
   symbol: string
   rsi: number
@@ -36,6 +38,15 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const symbol = searchParams.get("symbol")?.toUpperCase() || "AAPL"
   const interval = searchParams.get("interval") || "daily"
+
+  if (CRYPTO_SYMBOLS.has(symbol)) {
+    return NextResponse.json({
+      indicators: null,
+      source: "unsupported",
+      error: "Technical indicators are not available for crypto symbols via this endpoint",
+      timestamp: new Date().toISOString(),
+    })
+  }
 
   try {
     // Check cache

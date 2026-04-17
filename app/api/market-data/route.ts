@@ -5,6 +5,13 @@ const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
 const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY 
 const FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 const ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+const COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
+
+const COINGECKO_IDS: Record<string, string> = {
+  BTC: "bitcoin", ETH: "ethereum", SOL: "solana",
+  BNB: "binancecoin", XRP: "ripple", DOGE: "dogecoin",
+  ADA: "cardano", AVAX: "avalanche-2",
+}
 
 interface QuoteData {
   symbol: string
@@ -130,9 +137,38 @@ async function fetchAlphaVantageHistory(symbol: string) {
 
 // 3. API HANDLERS
 
+async function fetchCoinGeckoQuote(symbol: string): Promise<QuoteData | null> {
+  const cgId = COINGECKO_IDS[symbol]
+  if (!cgId) return null
+  try {
+    const res = await fetch(
+      `${COINGECKO_BASE_URL}/coins/markets?vs_currency=usd&ids=${cgId}&price_change_percentage=24h`,
+      { next: { revalidate: 60 } }
+    )
+    if (!res.ok) return null
+    const [coin] = await res.json()
+    if (!coin) return null
+    const price = Number(coin.current_price)
+    return {
+      symbol,
+      price,
+      change:        Number(coin.price_change_24h)            ?? 0,
+      changePercent: Number(coin.price_change_percentage_24h) ?? 0,
+      high:          Number(coin.high_24h)                    ?? price,
+      low:           Number(coin.low_24h)                     ?? price,
+      open:          price - (Number(coin.price_change_24h)   ?? 0),
+      previousClose: price - (Number(coin.price_change_24h)   ?? 0),
+      volume:        Number(coin.total_volume)                ?? 0,
+      timestamp:     new Date().toISOString(),
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
-  const symbols = searchParams.get("symbols") || "AAPL,NVDA" 
+  const symbols    = searchParams.get("symbols") || "AAPL,NVDA"
   const symbolList = symbols.split(",").map((s) => s.trim().toUpperCase())
   const quotes: QuoteData[] = []
 
@@ -143,9 +179,22 @@ export async function GET(request: Request) {
       continue
     }
 
-    // Try Finnhub -> Failover to Alpha Vantage
-    let quote = await fetchFinnhubQuote(symbol)    
-    if (!quote) quote = await fetchAlphaVantageQuote(symbol)   
+    const isCrypto = !!COINGECKO_IDS[symbol]
+    let quote: QuoteData | null = null
+
+    if (isCrypto) {
+      // CoinGecko for crypto: real price, change, volume, high/low
+      quote = await fetchCoinGeckoQuote(symbol)
+      // Finnhub as fallback (maps BTC → BINANCE:BTCUSDT)
+      if (!quote) {
+        const finnhubPair = CRYPTO_FINNHUB_MAP[symbol]
+        if (finnhubPair) quote = await fetchFinnhubQuote(finnhubPair).then(q => q ? { ...q, symbol } : null)
+      }
+    } else {
+      // Stocks: Finnhub → Alpha Vantage fallback
+      quote = await fetchFinnhubQuote(symbol)
+      if (!quote) quote = await fetchAlphaVantageQuote(symbol)
+    }
 
     if (quote) {
       quotes.push(quote)
@@ -156,11 +205,17 @@ export async function GET(request: Request) {
   return NextResponse.json({ quotes, source: "real_api", timestamp: new Date().toISOString() })
 }
 
+const CRYPTO_FINNHUB_MAP: Record<string, string> = {
+  BTC: "BINANCE:BTCUSDT", ETH: "BINANCE:ETHUSDT", SOL: "BINANCE:SOLUSDT",
+  BNB: "BINANCE:BNBUSDT", XRP: "BINANCE:XRPUSDT", DOGE: "BINANCE:DOGEUSDT",
+  ADA: "BINANCE:ADAUSDT", AVAX: "BINANCE:AVAXUSDT",
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json()
     const symbol = body.symbol
-    const { from, to } = body 
+    const { from, to } = body
 
     // 1. Check Cache (Critical for Alpha Vantage limits)
     const cached = historyCache.get(symbol)
@@ -168,18 +223,25 @@ export async function POST(request: Request) {
         return NextResponse.json(cached.data)
     }
 
+    // Map crypto tickers to Finnhub pair format
+    const upperSymbol   = symbol?.toUpperCase()
+    const finnhubPair   = CRYPTO_FINNHUB_MAP[upperSymbol]
+    const isCrypto      = !!finnhubPair
+    const finnhubSymbol = finnhubPair ?? symbol
+
     // 1. Try Finnhub First (Preferred)
     if (FINNHUB_API_KEY) {
-      const resolution = "D" 
-      const toTime = to || Math.floor(Date.now() / 1000)
+      const resolution = "D"
+      const toTime   = to   || Math.floor(Date.now() / 1000)
       const fromTime = from || Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60)
-      
-      const url = `${FINNHUB_BASE_URL}/stock/candle?symbol=${symbol}&resolution=${resolution}&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`
-      
+
+      // Crypto uses /crypto/candle; stocks use /stock/candle
+      const endpoint = isCrypto ? "crypto/candle" : "stock/candle"
+      const url = `${FINNHUB_BASE_URL}/${endpoint}?symbol=${finnhubSymbol}&resolution=${resolution}&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`
+
       const response = await fetch(url)
       const data = await response.json()
 
-      // If Finnhub works, return it
       if (data.s === "ok") {
         const bars = data.t.map((timestamp: number, index: number) => ({
             date: new Date(timestamp * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
@@ -191,16 +253,47 @@ export async function POST(request: Request) {
         }))
         const result = { symbol, bars, source: "finnhub_real" }
         historyCache.set(symbol, { data: result, timestamp: Date.now() })
-        return NextResponse.json(result)      
-      } 
-      
-      // Log the specific error for debugging, but don't stop execution
+        return NextResponse.json(result)
+      }
+
       if (data.error) {
-          console.warn(`[Finnhub History] Access denied for ${symbol}. Switching to fallback...`)
+        console.warn(`[Finnhub History] Error for ${symbol}: ${data.error}`)
       }
     }
 
-    // 2. Fallback to Alpha Vantage (Backup)
+    // CoinGecko historical OHLC for crypto
+    if (isCrypto) {
+      const cgId = COINGECKO_IDS[upperSymbol]
+      if (cgId) {
+        try {
+          const [ohlcRes, chartRes] = await Promise.all([
+            fetch(`${COINGECKO_BASE_URL}/coins/${cgId}/ohlc?vs_currency=usd&days=30`),
+            fetch(`${COINGECKO_BASE_URL}/coins/${cgId}/market_chart?vs_currency=usd&days=30&interval=daily`),
+          ])
+          if (ohlcRes.ok && chartRes.ok) {
+            const ohlc: [number, number, number, number, number][] = await ohlcRes.json()
+            const chart = await chartRes.json()
+            const volMap = new Map<number, number>(
+              (chart.total_volumes as [number, number][]).map(([ts, v]) => [Math.floor(ts / 86400000), v])
+            )
+            const bars = ohlc.map(([ts, o, h, l, c]) => ({
+              date:   new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+              price:  c,
+              open:   o,
+              high:   h,
+              low:    l,
+              volume: volMap.get(Math.floor(ts / 86400000)) ?? 0,
+            }))
+            const result = { symbol, bars, source: "coingecko" }
+            historyCache.set(symbol, { data: result, timestamp: Date.now() })
+            return NextResponse.json(result)
+          }
+        } catch (e) {
+          console.error(`[CoinGecko History] ${symbol}:`, e)
+        }
+      }
+      return NextResponse.json({ error: `Historical data unavailable for ${symbol}` }, { status: 404 })
+    }
     const fallbackData = await fetchAlphaVantageHistory(symbol)
     
     if (fallbackData) {
