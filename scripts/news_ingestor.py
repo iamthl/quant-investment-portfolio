@@ -13,11 +13,48 @@ from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 
+#  FinBERT singleton 
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    _FINBERT_AVAILABLE = True
+except ImportError:
+    _FINBERT_AVAILABLE = False
+
+_finbert_tokenizer = None
+_finbert_model     = None
+_finbert_device    = "cpu"
+
+def _load_finbert() -> bool:
+    """Load ProsusAI/finbert once. Returns True on success."""
+    global _finbert_tokenizer, _finbert_model, _finbert_device
+    if _finbert_model is not None:
+        return True
+    if not _FINBERT_AVAILABLE:
+        return False
+    try:
+        print("[FinBERT] Loading ProsusAI/finbert …")
+        _finbert_device    = "cuda" if torch.cuda.is_available() else "cpu"
+        _finbert_tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+        _finbert_model     = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+        _finbert_model.to(_finbert_device)
+        _finbert_model.eval()
+        print(f"[FinBERT] Loaded on {_finbert_device}")
+        return True
+    except Exception as exc:
+        print(f"[FinBERT] Load failed: {exc}")
+        return False
+
 app = FastAPI(
     title="News-Ingestor",
     description="News ingestion with Alpha Vantage News Sentiment + FinBERT analysis",
     version="2.0.0"
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Pre-load FinBERT so the first request isn't slow."""
+    _load_finbert()
 
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
@@ -82,45 +119,67 @@ def format_alpha_vantage_date(date_str: str) -> str:
     except:
         return datetime.utcnow().isoformat()
 
-# Enhanced FinBERT-style sentiment analysis
-def analyse_sentiment_finbert(text: str) -> SentimentResult:
-    """
-    Enhanced FinBERT-style sentiment analysis.
-    In production, use: from transformers import AutoModelForSequenceClassification
-    model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
-    """
-    positive_keywords = [
-        "surge", "growth", "profit", "bullish", "upgrade", "record", "beat", 
-        "strong", "soar", "rally", "gain", "boom", "breakthrough", "optimistic",
-        "outperform", "exceed", "momentum", "upside", "buy", "accumulate"
-    ]
-    negative_keywords = [
-        "crash", "loss", "bearish", "downgrade", "miss", "weak", "decline", 
-        "concern", "fall", "drop", "plunge", "risk", "warning", "sell",
-        "underperform", "cut", "layoff", "recession", "default", "bankruptcy"
-    ]
-    
-    text_lower = text.lower()
-    pos_count = sum(1 for word in positive_keywords if word in text_lower)
-    neg_count = sum(1 for word in negative_keywords if word in text_lower)
-    
-    total = pos_count + neg_count
+def _keyword_fallback(text: str) -> SentimentResult:
+    """Keyword heuristic — used only when FinBERT is unavailable."""
+    positive_kw = ["surge","growth","profit","bullish","upgrade","record","beat","strong",
+                   "soar","rally","gain","boom","breakthrough","optimistic","outperform",
+                   "exceed","momentum","upside","buy","accumulate"]
+    negative_kw = ["crash","loss","bearish","downgrade","miss","weak","decline","concern",
+                   "fall","drop","plunge","risk","warning","sell","underperform","cut",
+                   "layoff","recession","default","bankruptcy"]
+    t = text.lower()
+    pos = sum(1 for w in positive_kw if w in t)
+    neg = sum(1 for w in negative_kw if w in t)
+    total = pos + neg
     if total == 0:
         return SentimentResult(text=text[:100], score=0.0, label="neutral", confidence=0.5)
-    
-    score = (pos_count - neg_count) / max(total, 1) * 0.8
-    score = max(-1.0, min(1.0, score))
-    
-    if score > 0.15:
-        label = "positive"
-    elif score < -0.15:
-        label = "negative"
-    else:
-        label = "neutral"
-    
-    confidence = min(0.95, 0.5 + abs(score) * 0.5)
-    
-    return SentimentResult(text=text[:100], score=round(score, 3), label=label, confidence=round(confidence, 3))
+    score = max(-1.0, min(1.0, (pos - neg) / total * 0.8))
+    label = "positive" if score > 0.15 else "negative" if score < -0.15 else "neutral"
+    return SentimentResult(text=text[:100], score=round(score, 3), label=label,
+                           confidence=round(min(0.95, 0.5 + abs(score) * 0.5), 3))
+
+
+def analyse_sentiment_finbert(text: str) -> SentimentResult:
+    """
+    Real FinBERT inference (ProsusAI/finbert).
+    Falls back to keyword heuristic if the model is unavailable.
+    FinBERT labels: positive / negative / neutral
+    Score = positive_prob - negative_prob  → range [-1, +1]
+    """
+    if not _load_finbert():
+        return _keyword_fallback(text)
+
+    try:
+        import torch
+
+        inputs = _finbert_tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+            padding=True,
+        )
+        inputs = {k: v.to(_finbert_device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            logits = _finbert_model(**inputs).logits
+            probs  = torch.softmax(logits, dim=-1)[0].cpu().tolist()
+
+        # FinBERT label order: positive=0, negative=1, neutral=2
+        id2label = _finbert_model.config.id2label
+        prob_map  = {id2label[i].lower(): probs[i] for i in range(len(probs))}
+
+        pos_prob  = prob_map.get("positive", 0.0)
+        neg_prob  = prob_map.get("negative", 0.0)
+        score     = round(pos_prob - neg_prob, 4)          # [-1, +1]
+        label     = max(prob_map, key=prob_map.__getitem__) # dominant class
+        confidence = round(max(probs), 4)
+
+        return SentimentResult(text=text[:100], score=score, label=label, confidence=confidence)
+
+    except Exception as exc:
+        print(f"[FinBERT] Inference error: {exc} — falling back to keywords")
+        return _keyword_fallback(text)
 
 # @app.get("/")
 # async def root():
@@ -197,7 +256,7 @@ async def get_news(
                 overall_score = item.get("overall_sentiment_score", 0)
                 
                 # Also run our FinBERT analysis for comparison
-                finbert_result = analyze_sentiment_finbert(item.get("title", ""))
+                finbert_result = analyse_sentiment_finbert(item.get("title", ""))
                 
                 # Combine scores (weighted average)
                 combined_score = (overall_score * 0.6) + (finbert_result.score * 0.4)
