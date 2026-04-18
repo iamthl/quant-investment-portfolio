@@ -27,6 +27,13 @@ try:
 except ImportError:
     XGBOOST_AVAILABLE = False
 
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except ImportError:
+    SHAP_AVAILABLE = False
+    logging.warning("shap not installed – feature attribution will be unavailable")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -48,6 +55,8 @@ class PredictionResult:
     model_type: str
     horizon_days: int
     timestamp: str
+    # Real per-sample SHAP values (positive = pushes toward "price increase")
+    shap_values: Optional[Dict[str, float]] = None
 
 
 
@@ -229,9 +238,21 @@ class QuantPredictiveModel:
         self.model_type    = model_type
         self.model         = None
         self.scaler        = None
+        self.explainer     = None   # shap.TreeExplainer — created lazily after model is ready
         self.feature_names = FEATURE_COLS
         self.trained_at    = None
         self.train_auc     = None
+
+    def _create_explainer(self) -> None:
+        """Create a shap.TreeExplainer for the current model (no-op if shap unavailable)."""
+        if not SHAP_AVAILABLE or self.model is None:
+            return
+        try:
+            self.explainer = shap.TreeExplainer(self.model)
+            logger.info("SHAP TreeExplainer created")
+        except Exception as e:
+            logger.warning(f"Could not create SHAP explainer: {e}")
+            self.explainer = None
 
     # Training 
 
@@ -292,6 +313,7 @@ class QuantPredictiveModel:
         self.train_auc = roc_auc_score(y_test, proba_test)
         self.trained_at = datetime.utcnow().isoformat()
 
+        self._create_explainer()
         logger.info(f"Model trained | AUC={self.train_auc:.3f} | type={self.model_type}")
         return {"auc": self.train_auc, "n_samples": len(X), "trained_at": self.trained_at}
 
@@ -316,14 +338,32 @@ class QuantPredictiveModel:
         latest_s = self.scaler.transform(latest)
         prob     = float(self.model.predict_proba(latest_s)[0, 1])
 
-        # Feature importances (top-5)
+        # Global feature importances (model-level, top-5)
         importances = {}
         if hasattr(self.model, "feature_importances_"):
             imp = self.model.feature_importances_
             top = sorted(zip(self.feature_names, imp), key=lambda x: -x[1])[:5]
             importances = {k: round(float(v), 4) for k, v in top}
 
-        # Confidence = distance from 0.5
+        # Real per-sample SHAP values via TreeExplainer
+        shap_dict: Optional[Dict[str, float]] = None
+        if SHAP_AVAILABLE and self.explainer is not None:
+            try:
+                sv = self.explainer.shap_values(latest_s)
+                # GradientBoosting returns (n_samples, n_features) directly;
+                # some versions/models return a list [class0, class1] — take class 1
+                if isinstance(sv, list):
+                    sv = sv[1] if len(sv) > 1 else sv[0]
+                sv_flat = sv[0] if sv.ndim == 2 else sv
+                shap_dict = {
+                    feat: round(float(v), 4)
+                    for feat, v in zip(self.feature_names, sv_flat)
+                }
+                logger.debug(f"SHAP computed for {symbol}: {list(shap_dict.items())[:3]}")
+            except Exception as e:
+                logger.warning(f"SHAP inference failed for {symbol}: {e}")
+
+        # Confidence = distance from 0.5, amplified
         confidence = min(1.0, abs(prob - 0.5) * 3)
 
         action = self._prob_to_action(prob, confidence)
@@ -339,6 +379,7 @@ class QuantPredictiveModel:
             model_type=self.model_type,
             horizon_days=self.horizon_days,
             timestamp=datetime.utcnow().isoformat(),
+            shap_values=shap_dict,
         )
 
     # Persistence 
@@ -358,6 +399,7 @@ class QuantPredictiveModel:
                 self.model = pickle.load(f)
             with open(scaler_path, "rb") as f:
                 self.scaler = pickle.load(f)
+            self._create_explainer()
             logger.info("Loaded cached model")
             return True
         return False

@@ -61,3 +61,4 @@ pandas
 numpy
 xgboost
 joblib
+shap

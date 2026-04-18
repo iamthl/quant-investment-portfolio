@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -58,90 +58,117 @@ export function StockDetail({ symbol }: StockDetailProps) {
   // State for historical data (Price + AI Probability)
   const [historicalData, setHistoricalData] = useState<any[]>([])
   const [isChartLoading, setIsChartLoading] = useState(true)
+  const [isStale, setIsStale]               = useState(false)
+  const [staleSince, setStaleSince]         = useState<string | null>(null)
 
-  // Mock company info
+  const retryTimer   = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const symbolRef    = useRef(symbol)
+  const insightRef   = useRef(insight)
+  symbolRef.current  = symbol
+  insightRef.current = insight
+
   const [companyInfo, setCompanyInfo] = useState<any>({
-    name: "Loading...",
-    sector: "...",
-    industry: "...",
-    marketCap: "...",
-    peRatio: "...",
-    eps: "...",
-    dividend: "...",
-    beta: "..."
+    name: "Loading...", sector: "...", industry: "...", marketCap: "...",
+    peRatio: "...", eps: "...", dividend: "...", beta: "..."
   })
 
-  // Generate AI investment suggestion
-  const aiSuggestion = generateAISuggestion(quote, indicators, articles)
+  const aiSuggestion = buildAISuggestion(insight, quote, articles)
 
-  const safeNumber = (val: number | undefined, fallback = 0): number => {
-    return typeof val === "number" && !isNaN(val) ? val : fallback
-  }
+  const safeNumber = (val: number | undefined, fallback = 0): number =>
+    typeof val === "number" && !isNaN(val) ? val : fallback
+
+  const clearRetry = useCallback(() => {
+    if (retryTimer.current) { clearTimeout(retryTimer.current); retryTimer.current = null }
+  }, [])
+
+  const fetchPriceHistory = useCallback(async (silent = false) => {
+    if (!silent) setIsChartLoading(true)
+    try {
+      const [priceRes, aiRes] = await Promise.all([
+        fetch("/api/market-data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol: symbolRef.current, interval: "D" }),
+        }),
+        fetch(`/api/quant-insights/history?symbol=${symbolRef.current}`),
+      ])
+
+      const aiHistory = aiRes.ok ? (await aiRes.json()).history ?? [] : []
+
+      // Accept both 200 (fresh/stale) and handle 503 (no cache yet)
+      const priceData = await priceRes.json()
+
+      if (priceData.bars?.length > 0) {
+        const combined = priceData.bars.map((bar: any) => {
+          const match = aiHistory.find((h: any) =>
+            new Date(h.timestamp).toLocaleDateString() === new Date(bar.date).toLocaleDateString()
+          )
+          return {
+            ...bar,
+            probability: match
+              ? match.probabilityIncrease
+              : (insightRef.current?.probabilityIncrease ?? 0.5),
+          }
+        })
+        setHistoricalData(combined)
+
+        if (priceData.stale) {
+          setIsStale(true)
+          setStaleSince(priceData.cachedAt ?? null)
+          // Schedule a silent retry using the server's retryAfter hint
+          clearRetry()
+          retryTimer.current = setTimeout(
+            () => fetchPriceHistory(true),
+            (priceData.retryAfter ?? 60) * 1000
+          )
+        } else {
+          setIsStale(false)
+          setStaleSince(null)
+          clearRetry()
+        }
+      } else {
+        // No data at all — retry after hint (or 60s default)
+        const retryAfter = (priceData.retryAfter ?? 60) * 1000
+        clearRetry()
+        retryTimer.current = setTimeout(() => fetchPriceHistory(true), retryAfter)
+      }
+    } catch (err) {
+      console.error("Failed to load historical data", err)
+      // Network error — retry in 30s
+      clearRetry()
+      retryTimer.current = setTimeout(() => fetchPriceHistory(true), 30_000)
+    } finally {
+      if (!silent) setIsChartLoading(false)
+    }
+  }, [clearRetry])
 
   useEffect(() => {
-    async function fetchData() {
-      setIsChartLoading(true)
-      try {
-        // 1. Fetch Market Price History
-        const priceRes = await fetch('/api/market-data', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symbol, interval: 'D' })
+    fetchPriceHistory(false)
+    return clearRetry
+  }, [symbol, fetchPriceHistory, clearRetry])
+
+  // Fetch company info once per symbol (doesn't need retry — cached 1h server-side)
+  useEffect(() => {
+    fetch(`/api/company-info?symbol=${symbol}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (!d?.info) return
+        const { info } = d
+        setCompanyInfo({
+          name: info.name, sector: info.sector, industry: info.industry,
+          marketCap: info.marketCap, peRatio: info.peRatio, eps: info.eps,
+          dividend: info.dividendYield, beta: info.beta,
         })
-        
-        // 2. Fetch REAL AI Probability History from Database
-        const aiRes = await fetch(`/api/quant-insights/history?symbol=${symbol}`)
-        
-        let aiHistory = []
-        if (aiRes.ok) {
-          const aiData = await aiRes.json()
-          aiHistory = aiData.history || []
-        }
-
-        if (priceRes.ok) {
-          const priceData = await priceRes.json()
-          if (priceData.bars) {
-            // Merge AI probabilities with price bars based on date
-            const combined = priceData.bars.map((bar: any) => {
-              const matchingAI = aiHistory.find((h: any) => 
-                new Date(h.timestamp).toLocaleDateString() === new Date(bar.date).toLocaleDateString()
-              )
-              return {
-                ...bar,
-                // Fallback to latest probability if historical point missing to maintain chart flow
-                probability: matchingAI ? matchingAI.probabilityIncrease : 
-                             (insight?.probability_increase || 0.5)
-              }
-            })
-            setHistoricalData(combined)
-          }
-        }
-      } catch (error) {
-        console.error("Failed to load historical data", error)
-      } finally {
-        setIsChartLoading(false)
-      }
-
-      setCompanyInfo({
-        name: getCompanyName(symbol),
-        sector: getSector(symbol),
-        industry: getIndustry(symbol),
-        marketCap: getMarketCap(symbol),
-        peRatio: (15 + Math.random() * 30).toFixed(2),
-        eps: (2 + Math.random() * 10).toFixed(2),
-        dividend: (Math.random() * 3).toFixed(2),
-        beta: (0.8 + Math.random() * 0.8).toFixed(2),
       })
-    }
-
-    fetchData()
-  }, [symbol, insight])
+      .catch(() => {})
+  }, [symbol])
 
   const handleRefresh = () => {
     refreshQuotes()
     refreshNews()
     refreshIndicators()
-    setIsChartLoading(true)
+    clearRetry()
+    fetchPriceHistory(false)
   }
 
   return (
@@ -230,11 +257,19 @@ export function StockDetail({ symbol }: StockDetailProps) {
                   <BarChart3 className="h-5 w-5 text-primary" />
                   Market Intelligence
                 </div>
-                {insight && (
-                  <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px]">
-                    <Activity className="h-3 w-3 mr-1" /> Probability Overlay Active
-                  </Badge>
-                )}
+                <div className="flex items-center gap-2">
+                  {isStale && (
+                    <Badge variant="outline" className="text-yellow-400 border-yellow-500/50 font-mono text-[10px]">
+                      <RefreshCw className="h-2.5 w-2.5 mr-1 animate-spin" />
+                      Cached{staleSince ? ` · ${new Date(staleSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""} · updating…
+                    </Badge>
+                  )}
+                  {insight && (
+                    <Badge variant="secondary" className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px]">
+                      <Activity className="h-3 w-3 mr-1" /> Probability Overlay Active
+                    </Badge>
+                  )}
+                </div>
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -360,27 +395,38 @@ export function StockDetail({ symbol }: StockDetailProps) {
                               <div className="space-y-2 text-xs font-mono">
                                 <div className="flex justify-between">
                                   <span className="text-muted-foreground">Engine Type</span>
-                                  <span className="text-primary">{insight?.model_type || "Gradient Boosting"}</span>
+                                  <span className="text-primary">{insight?.modelType || "—"}</span>
                                 </div>
                                 <div className="flex justify-between">
                                   <span className="text-muted-foreground">Horizon</span>
                                   <span>5 Trading Days</span>
                                 </div>
                                 <div className="flex justify-between">
-                                  <span className="text-muted-foreground">Last Retrained</span>
-                                  <span>Daily</span>
+                                  <span className="text-muted-foreground">Fused Score</span>
+                                  <span>{insight?.fusedScore ?? "—"}/100</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">Risk Level</span>
+                                  <span className={insight?.riskLevel === "LOW" ? "text-green-400" : insight?.riskLevel === "HIGH" ? "text-red-400" : "text-yellow-400"}>
+                                    {insight?.riskLevel ?? "—"}
+                                  </span>
                                 </div>
                               </div>
                             </div>
                             <div className="p-4 rounded-lg bg-secondary/30 border border-border">
-                              <h4 className="text-xs font-semibold uppercase text-muted-foreground mb-1">Backtest Accuracy</h4>
-                              <div className="text-2xl font-bold text-green-400">74.2%</div>
+                              <h4 className="text-xs font-semibold uppercase text-muted-foreground mb-1">ML Confidence</h4>
+                              <div className={`text-2xl font-bold ${(insight?.confidence ?? 0) >= 70 ? "text-green-400" : (insight?.confidence ?? 0) >= 55 ? "text-yellow-400" : "text-muted-foreground"}`}>
+                                {insight ? `${insight.confidence.toFixed(1)}%` : "—"}
+                              </div>
+                              <p className="text-[10px] text-muted-foreground mt-1 font-mono">
+                                {insight ? "Live model confidence" : "Awaiting model sync"}
+                              </p>
                             </div>
                           </div>
                           <div className="space-y-3">
                             <h4 className="text-xs font-semibold text-muted-foreground uppercase">Key Prediction Drivers</h4>
-                            {insight?.feature_importances ? (
-                              Object.entries(insight.feature_importances)
+                            {insight?.featureImportances ? (
+                              Object.entries(insight.featureImportances)
                                 .sort(([,a], [,b]) => (b as number) - (a as number))
                                 .map(([feature, weight]) => (
                                   <div key={feature} className="space-y-1">
@@ -506,6 +552,37 @@ export function StockDetail({ symbol }: StockDetailProps) {
                 <div className="text-sm text-muted-foreground leading-relaxed p-4 rounded-lg bg-secondary/30 border border-border">
                   {aiSuggestion.reasoning}
                 </div>
+
+                {/* SHAP-style Feature Attribution */}
+                {aiSuggestion.shapValues.length > 0 && (
+                  <div className="p-4 rounded-lg bg-secondary/30 border border-border space-y-2">
+                    <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
+                      <Activity className="h-3 w-3" /> SHAP Attribution
+                    </h5>
+                    {aiSuggestion.shapValues.map((s, i) => {
+                      const positive = s.contribution >= 0
+                      return (
+                        <div key={i} className="space-y-0.5">
+                          <div className="flex justify-between text-[10px] font-mono">
+                            <span className="text-muted-foreground">{s.feature}</span>
+                            <span className={positive ? "text-green-400" : "text-red-400"}>
+                              {positive ? "▲" : "▼"} {s.pct.toFixed(1)}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all ${positive ? "bg-green-500" : "bg-red-500"}`}
+                              style={{ width: `${s.pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <p className="text-[9px] text-muted-foreground/60 font-mono pt-1">
+                      ▲ bullish · ▼ bearish · bar width and % = share of total prediction signal
+                    </p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -693,71 +770,6 @@ function IndicatorRow({ name, value, signal }: { name: string; value: number | u
   )
 }
 
-// Helper functions
-function getCompanyName(symbol: string): string {
-  const names: Record<string, string> = {
-    AAPL: "Apple Inc.",
-    NVDA: "NVIDIA Corporation",
-    MSFT: "Microsoft Corporation",
-    TSLA: "Tesla, Inc.",
-    GOOGL: "Alphabet Inc.",
-    AMZN: "Amazon.com, Inc.",
-    META: "Meta Platforms, Inc.",
-    BTC: "Bitcoin",
-    ETH: "Ethereum",
-    SOL: "Solana",
-  }
-  return names[symbol] || `${symbol} Corporation`
-}
-
-function getSector(symbol: string): string {
-  const sectors: Record<string, string> = {
-    AAPL: "Technology",
-    NVDA: "Technology",
-    MSFT: "Technology",
-    TSLA: "Automotive",
-    GOOGL: "Technology",
-    AMZN: "Consumer",
-    META: "Technology",
-    BTC: "Crypto",
-    ETH: "Crypto",
-    SOL: "Crypto",
-  }
-  return sectors[symbol] || "Technology"
-}
-
-function getIndustry(symbol: string): string {
-  const industries: Record<string, string> = {
-    AAPL: "Consumer Electronics",
-    NVDA: "Semiconductors",
-    MSFT: "Software",
-    TSLA: "Electric Vehicles",
-    GOOGL: "Internet Services",
-    AMZN: "E-Commerce",
-    META: "Social Media",
-    BTC: "Cryptocurrency",
-    ETH: "Cryptocurrency",
-    SOL: "Cryptocurrency",
-  }
-  return industries[symbol] || "Technology"
-}
-
-function getMarketCap(symbol: string): string {
-  const caps: Record<string, string> = {
-    AAPL: "$2.8T",
-    NVDA: "$1.2T",
-    MSFT: "$2.9T",
-    TSLA: "$750B",
-    GOOGL: "$1.7T",
-    AMZN: "$1.5T",
-    META: "$850B",
-    BTC: "$850B",
-    ETH: "$280B",
-    SOL: "$45B",
-  }
-  return caps[symbol] || "$100B"
-}
-
 function formatVolume(vol: number): string {
   if (vol >= 1e9) return `${(vol / 1e9).toFixed(1)}B`
   if (vol >= 1e6) return `${(vol / 1e6).toFixed(1)}M`
@@ -799,47 +811,137 @@ function getSignal(name: string, value: number | undefined): "buy" | "sell" | "n
   return "neutral"
 }
 
-function generateAISuggestion(quote: any, indicators: any, articles: any[]) {
-  const price = quote?.price || 100
-  const rsi = indicators?.rsi || 50
-  const macd = indicators?.macd || 0
+const FEATURE_LABELS: Record<string, string> = {
+  // TypeScript fallback keys (quant-insights/route.ts)
+  momentum_1d:     "Day Momentum",
+  stoch_position:  "Intraday Range Position",
+  adx_14:          "Trend Strength (ADX)",
+  // Python ML model feature names (FEATURE_COLS in predictive_model.py)
+  ret_1d:          "1-Day Return",
+  ret_3d:          "3-Day Return",
+  ret_5d:          "5-Day Return",
+  ret_10d:         "10-Day Return",
+  ret_20d:         "20-Day Return",
+  sma_5_ratio:     "Price / SMA5",
+  sma_10_ratio:    "Price / SMA10",
+  sma_20_ratio:    "Price / SMA20",
+  sma_50_ratio:    "Price / SMA50",
+  rsi_14:          "RSI(14)",
+  macd:            "MACD Line",
+  macd_signal:     "MACD Signal",
+  macd_hist:       "MACD Histogram",
+  bb_pct:          "Bollinger Band Position",
+  bb_width:        "Bollinger Band Width",
+  atr_14_pct:      "ATR(14) % of Price",
+  vol_ratio_20:    "Volume vs 20-Day Avg",
+  vol_trend:       "Volume Trend",
+  momentum_10:     "10-Day Momentum",
+  momentum_20:     "20-Day Momentum",
+  stoch_k:         "Stochastic %K",
+  stoch_d:         "Stochastic %D",
+}
 
-  // Calculate sentiment from news
-  const avgSentiment =
-    articles.length > 0 ? articles.reduce((sum, a) => sum + a.sentimentScore, 0) / articles.length : 0
+function buildAISuggestion(insight: any, quote: any, articles: any[]) {
+  const price    = quote?.price || 0
+  const high     = quote?.high  || price
+  const low      = quote?.low   || price
 
-  // Calculate scores
-  const technicalScore = Math.min(100, Math.max(0, 50 + (50 - rsi) / 2 + (macd > 0 ? 15 : -15)))
-  const sentimentScore = Math.min(100, Math.max(0, 50 + avgSentiment * 50))
-  const confidence = Math.round((technicalScore + sentimentScore) / 2)
+  // ATR-based price targets
+  const atrPct   = price > 0 ? (high - low) / price : 0.02
+  const isBullish = insight?.action === "BUY" || insight?.action === "STRONG_BUY"
+  const isBearish = insight?.action === "SELL" || insight?.action === "STRONG_SELL"
 
-  let signal: "BUY" | "SELL" | "HOLD" = "HOLD"
-  if (confidence >= 65 && rsi < 70) signal = "BUY"
-  else if (confidence <= 35 || rsi > 70) signal = "SELL"
+  const targetPrice = price > 0
+    ? isBullish
+      ? (price * (1 + atrPct * 3)).toFixed(2)
+      : isBearish
+        ? (price * (1 - atrPct * 2)).toFixed(2)
+        : (price * (1 + atrPct)).toFixed(2)
+    : "—"
+
+  const stopLoss = price > 0
+    ? isBullish
+      ? (price * (1 - atrPct * 1.5)).toFixed(2)
+      : (price * (1 - atrPct * 0.5)).toFixed(2)
+    : "—"
+
+  const upside   = price > 0 && targetPrice !== "—" ? parseFloat(targetPrice) - price : 0
+  const downside = price > 0 && stopLoss    !== "—" ? price - parseFloat(stopLoss)    : 1
+  const riskReward = downside > 0 ? `${(upside / downside).toFixed(1)}:1` : "—"
+
+  // Signal display
+  const actionMap: Record<string, "BUY" | "SELL" | "HOLD"> = {
+    STRONG_BUY: "BUY", BUY: "BUY",
+    HOLD:       "HOLD",
+    SELL:       "SELL", STRONG_SELL: "SELL",
+  }
+  const signal = actionMap[insight?.action ?? "HOLD"] ?? "HOLD"
+
+  // Scores from real ML; fall back to news sentiment when insight unavailable
+  const avgNewsSentiment = articles.length > 0
+    ? articles.reduce((sum: number, a: any) => sum + (a.sentimentScore ?? 0), 0) / articles.length
+    : 0
+  const technicalScore = insight?.technicalScore ?? 50
+  const sentimentScore = insight?.sentimentScore ?? Math.round(50 + avgNewsSentiment * 50)
+  const confidence     = insight?.confidence     ?? 50
+
+  // Feature contributions are pre-normalized signed percentages (sum of |pct| = 100)
+  // provided by the API. Each value is e.g. +45.0 (bullish, 45%) or -25.0 (bearish, 25%).
+  const featureContributions: Record<string, number> = insight?.featureContributions ?? {}
+
+  const shapValues = Object.entries(featureContributions)
+    .map(([feature, signedPct]) => ({
+      feature: FEATURE_LABELS[feature] ?? (feature === "_sentiment" ? "News Sentiment" : feature.replace(/_/g, " ")),
+      pct:     Math.abs(signedPct),          // absolute percentage for bar width + label
+      contribution: signedPct,               // signed: positive = bullish, negative = bearish
+    }))
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 6)
+
+  // Strengths from technicalFactors/sentimentFactors with smarter classification
+  const techFactors = insight?.technicalFactors ?? []
+  const sentFactors = insight?.sentimentFactors ?? []
+  const allFactors  = [...techFactors, ...sentFactors]
+
+  const BULLISH_RE = /bullish|oversold|recovering|lower band|support|crossover.*\+|histogram \+|gained|positive|strong trend/i
+  const BEARISH_RE = /bearish|overbought|upper band|resistance|histogram -|lost|negative|weak.*rang|ranging|fading|exhausting/i
+
+  const strengths = allFactors.filter((f: string) => BULLISH_RE.test(f)).slice(0, 3)
+  const risks     = allFactors.filter((f: string) => BEARISH_RE.test(f)).slice(0, 3)
+
+  // Fallback strengths/risks when factors are empty
+  const defaultStrengths = isBullish
+    ? ["Positive technical momentum score", "Favorable risk/reward ratio"]
+    : ["Current price stability", "Diversified market exposure"]
+
+  const defaultRisks = [
+    "Market volatility exposure",
+    isBearish ? "Weakening technical momentum" : "Sector rotation risk",
+    "Macroeconomic uncertainty",
+  ]
+
+  // Reasoning: prefer real ML reasoning, fallback to constructed text
+  const reasoning = insight?.reasoning
+    ?? (isBullish
+      ? `ML model signals a bullish setup (confidence ${confidence}%). Technical score ${technicalScore}/100 reflects positive momentum. ATR-based target set at $${targetPrice} with stop at $${stopLoss}.`
+      : isBearish
+        ? `ML model signals a bearish setup (confidence ${confidence}%). Technical score ${technicalScore}/100 reflects weakening momentum. Consider reducing exposure.`
+        : `ML model signals a neutral/consolidation phase (confidence ${confidence}%). Technical score ${technicalScore}/100 suggests mixed signals. Wait for clearer direction before adding positions.`)
 
   return {
     signal,
+    rawAction: insight?.action ?? "HOLD",
     confidence,
-    technicalScore: Math.round(technicalScore),
-    sentimentScore: Math.round(sentimentScore),
-    targetPrice: (price * (signal === "BUY" ? 1.15 : signal === "SELL" ? 0.95 : 1.05)).toFixed(2),
-    stopLoss: (price * (signal === "BUY" ? 0.92 : 0.88)).toFixed(2),
-    riskReward: signal === "BUY" ? "2.5:1" : signal === "SELL" ? "1.5:1" : "2:1",
-    reasoning:
-      signal === "BUY"
-        ? `Our AI analysis indicates a favorable entry point for this asset. Technical indicators show ${rsi < 40 ? "oversold conditions" : "healthy momentum"}, while market sentiment from recent news coverage is ${avgSentiment > 0.2 ? "predominantly positive" : "neutral to positive"}. The combination of ${macd > 0 ? "bullish MACD crossover" : "stabilizing momentum"} and improving fundamentals suggests potential upside. We recommend a position size aligned with your risk tolerance.`
-        : signal === "SELL"
-          ? `Current market conditions suggest caution for this asset. Technical indicators show ${rsi > 70 ? "overbought conditions" : "weakening momentum"}, combined with ${avgSentiment < -0.2 ? "negative sentiment" : "mixed market sentiment"} from recent news. Consider reducing exposure or implementing protective stop-losses to preserve capital.`
-          : `The asset is currently in a consolidation phase. Both technical indicators and sentiment are showing mixed signals. We recommend holding current positions and waiting for a clearer directional signal before making additional investments.`,
-    strengths: [
-      signal === "BUY" ? "Strong technical momentum" : "Current price stability",
-      avgSentiment > 0 ? "Positive news sentiment" : "Diversified market exposure",
-      "Liquid trading volume",
-    ],
-    risks: [
-      "Market volatility exposure",
-      rsi > 60 ? "Potential overbought conditions" : "Sector rotation risk",
-      "Macroeconomic uncertainty",
-    ],
+    technicalScore,
+    sentimentScore,
+    targetPrice,
+    stopLoss,
+    riskReward,
+    reasoning,
+    strengths:   strengths.length  > 0 ? strengths  : defaultStrengths,
+    risks:       risks.length      > 0 ? risks       : defaultRisks,
+    shapValues,
+    modelType:   insight?.modelType ?? "Gradient Boosting",
+    probabilityIncrease: insight?.probabilityIncrease ?? 0.5,
   }
 }

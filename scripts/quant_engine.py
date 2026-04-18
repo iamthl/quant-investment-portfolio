@@ -76,6 +76,8 @@ class QuantInsight(BaseModel):
     reasoning: str
     probability_increase: Optional[float] = None
     feature_importances: Optional[Dict[str, float]] = None
+    shap_values: Optional[Dict[str, float]] = None   # real per-sample SHAP (log-odds)
+    feature_contributions: Optional[Dict[str, float]] = None  # alias exposed to frontend
     model_type: str
     technical_factors: List[str] = []
     sentiment_factors: List[str] = []
@@ -103,7 +105,134 @@ class ServiceHealth(BaseModel):
     api_provider: str
     last_update: str
 
-# ── Utility Functions ────────────────────────────────────────────────────────
+#  Utility Functions 
+
+FEATURE_HUMAN: Dict[str, str] = {
+    "ret_1d":       "1-day return",
+    "ret_3d":       "3-day return",
+    "ret_5d":       "5-day return",
+    "ret_10d":      "10-day return",
+    "ret_20d":      "20-day return",
+    "sma_5_ratio":  "price/SMA5 ratio",
+    "sma_10_ratio": "price/SMA10 ratio",
+    "sma_20_ratio": "price/SMA20 ratio",
+    "sma_50_ratio": "price/SMA50 ratio",
+    "rsi_14":       "RSI(14)",
+    "macd":         "MACD line",
+    "macd_signal":  "MACD signal",
+    "macd_hist":    "MACD histogram",
+    "bb_pct":       "Bollinger band %B",
+    "bb_width":     "Bollinger band width",
+    "atr_14_pct":   "ATR(14) % of price",
+    "vol_ratio_20": "volume vs 20-day avg",
+    "vol_trend":    "volume trend",
+    "momentum_10":  "10-day momentum",
+    "momentum_20":  "20-day momentum",
+    "stoch_k":      "Stochastic %K",
+    "stoch_d":      "Stochastic %D",
+    "_sentiment":   "News Sentiment",
+}
+
+
+def compute_unified_attributions(
+    shap_values: Optional[Dict[str, float]],
+    tech_score: float,
+    sentiment_score: float,
+) -> List[tuple]:
+    """
+    Returns a list of (feature_key, signed_pct, abs_pct) sorted by abs_pct descending,
+    where all abs_pct values sum to 100.
+
+    Method:
+      1. Scale each SHAP value by its fraction of total |SHAP| × (tech_score − 50) × 0.7
+         → converts log-odds into "points of fused-score deviation contributed"
+      2. Add sentiment: (sentiment_score − 50) × 0.3
+      3. Normalise |contributions| → percentages summing to 100
+    """
+    unified: Dict[str, float] = {}
+
+    if shap_values:
+        total_abs_shap = sum(abs(v) for v in shap_values.values())
+        tech_deviation = tech_score - 50
+        if total_abs_shap > 0 and tech_deviation != 0:
+            for feat, sv in shap_values.items():
+                unified[feat] = (sv / total_abs_shap) * tech_deviation * 0.7
+        elif total_abs_shap > 0:
+            for feat, sv in shap_values.items():
+                unified[feat] = sv * 0.07   # neutral model — keep proportions, small scale
+
+    sent_contrib = (sentiment_score - 50) * 0.3
+    if abs(sent_contrib) > 0.01:
+        unified["_sentiment"] = sent_contrib
+
+    total_abs = sum(abs(v) for v in unified.values())
+    if total_abs == 0:
+        return []
+
+    results = [
+        (feat, round(v / total_abs * 100, 1), round(abs(v) / total_abs * 100, 1))
+        for feat, v in unified.items()
+        if abs(v) / total_abs >= 0.005   # drop < 0.5 % noise
+    ]
+    return sorted(results, key=lambda x: -x[2])
+
+
+def build_shap_reasoning(
+    symbol: str,
+    prob: float,
+    action: str,
+    confidence: float,
+    shap_values: Optional[Dict[str, float]],
+    model_type: str,
+    tech_score: float,
+    sentiment_score: float,
+    fused_score: float,
+) -> str:
+    conf_pct = round(confidence * 100)
+    action_label = {
+        "STRONG_BUY": "strongly bullish", "BUY": "bullish",
+        "HOLD": "neutral/consolidating",  "SELL": "bearish", "STRONG_SELL": "strongly bearish",
+    }.get(action, "neutral")
+
+    lines = [
+        f"{model_type} rates {symbol} as {action_label} — {prob:.1%} probability of a "
+        f">1% price increase over 5 trading days (confidence {conf_pct}%, "
+        f"fused score {fused_score:.0f}/100)."
+    ]
+
+    drivers = compute_unified_attributions(shap_values, tech_score, sentiment_score)
+
+    if drivers:
+        top5 = drivers[:5]
+        attr_parts = []
+        for feat, signed_pct, abs_pct in top5:
+            label = FEATURE_HUMAN.get(feat, feat.replace("_", " "))
+            direction = "bullish" if signed_pct > 0 else "bearish"
+            attr_parts.append(f"{label} ({abs_pct:.0f}%, {direction})")
+        lines.append(f"Attribution: {'; '.join(attr_parts)}.")
+
+        bullish = [(feat, abs_pct) for feat, sp, abs_pct in top5 if sp > 0]
+        bearish = [(feat, abs_pct) for feat, sp, abs_pct in top5 if sp < 0]
+        if bullish:
+            lines.append(
+                "Bullish drivers: " +
+                ", ".join(f"{FEATURE_HUMAN.get(f, f)} ({p:.0f}%)" for f, p in bullish[:3]) + "."
+            )
+        if bearish:
+            lines.append(
+                "Bearish headwinds: " +
+                ", ".join(f"{FEATURE_HUMAN.get(f, f)} ({p:.0f}%)" for f, p in bearish[:3]) + "."
+            )
+    else:
+        sent_delta = round(sentiment_score - 50)
+        sent_dir = "positive" if sent_delta > 5 else "negative" if sent_delta < -5 else "neutral"
+        lines.append(
+            f"News sentiment is {sent_dir} ({sent_delta:+d} pts from neutral), "
+            f"contributing 30% weight to the fused score."
+        )
+
+    return " ".join(lines)
+
 
 def calculate_sentiment_score(sentiment_data: dict) -> tuple:
     avg_sentiment = sentiment_data.get("avg_sentiment", 0)
@@ -190,15 +319,44 @@ async def get_quant_insights(symbols: str = Query("AAPL,NVDA,MSFT")):
                     "ts": datetime.utcnow()
                 })
 
+                reasoning = build_shap_reasoning(
+                    symbol=symbol,
+                    prob=prediction.probability_increase,
+                    action=prediction.action,
+                    confidence=prediction.confidence,
+                    shap_values=prediction.shap_values,
+                    model_type=prediction.model_type,
+                    tech_score=tech_score,
+                    sentiment_score=sentiment_score,
+                    fused_score=fused,
+                )
+
+                # Unified normalized attributions (sum to 100%) for the frontend
+                unified_drivers = compute_unified_attributions(
+                    prediction.shap_values, tech_score, sentiment_score
+                )
+                # {feature_key: signed_pct} — positive = bullish, negative = bearish
+                feature_contributions = {
+                    feat: signed_pct
+                    for feat, signed_pct, _ in unified_drivers
+                } if unified_drivers else None
+
                 insight = QuantInsight(
-                    symbol=symbol, technical_score=tech_score, sentiment_score=sentiment_score,
-                    fused_score=fused, action=prediction.action, confidence=prediction.confidence * 100,
-                    reasoning=f"ML Model ({prediction.model_type}) predicts {prediction.probability_increase:.1%} chance of increase.",
+                    symbol=symbol,
+                    technical_score=tech_score,
+                    sentiment_score=sentiment_score,
+                    fused_score=fused,
+                    action=prediction.action,
+                    confidence=prediction.confidence * 100,
+                    reasoning=reasoning,
                     probability_increase=prediction.probability_increase,
                     feature_importances=prediction.feature_importances,
-                    model_type=prediction.model_type, sentiment_factors=sentiment_factors,
+                    shap_values=prediction.shap_values,
+                    feature_contributions=feature_contributions,
+                    model_type=prediction.model_type,
+                    sentiment_factors=sentiment_factors,
                     risk_level="MEDIUM" if 0.4 < prediction.probability_increase < 0.6 else "LOW",
-                    timestamp=datetime.utcnow().isoformat()
+                    timestamp=datetime.utcnow().isoformat(),
                 )
                 insights.append(insight)
                 await publish_to_kafka(KAFKA_TOPIC_QUANT_INSIGHTS, insight.model_dump())
