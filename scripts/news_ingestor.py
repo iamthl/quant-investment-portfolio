@@ -7,7 +7,8 @@ and applies FinBERT sentiment analysis before publishing to Kafka
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -45,16 +46,17 @@ def _load_finbert() -> bool:
         print(f"[FinBERT] Load failed: {exc}")
         return False
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _load_finbert()
+    yield
+
 app = FastAPI(
     title="News-Ingestor",
     description="News ingestion with Alpha Vantage News Sentiment + FinBERT analysis",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan,
 )
-
-@app.on_event("startup")
-async def startup_event():
-    """Pre-load FinBERT so the first request isn't slow."""
-    _load_finbert()
 
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
@@ -111,13 +113,13 @@ def get_sentiment_label(score: float) -> str:
 def format_alpha_vantage_date(date_str: str) -> str:
     """Convert Alpha Vantage date format to ISO format"""
     if not date_str:
-        return datetime.utcnow().isoformat()
+        return datetime.now(timezone.utc).isoformat()
     try:
         # Format: 20231215T143000
         dt = datetime.strptime(date_str, "%Y%m%dT%H%M%S")
         return dt.isoformat()
     except:
-        return datetime.utcnow().isoformat()
+        return datetime.now(timezone.utc).isoformat()
 
 def _keyword_fallback(text: str) -> SentimentResult:
     """Keyword heuristic — used only when FinBERT is unavailable."""
@@ -140,12 +142,6 @@ def _keyword_fallback(text: str) -> SentimentResult:
 
 
 def analyse_sentiment_finbert(text: str) -> SentimentResult:
-    """
-    Real FinBERT inference (ProsusAI/finbert).
-    Falls back to keyword heuristic if the model is unavailable.
-    FinBERT labels: positive / negative / neutral
-    Score = positive_prob - negative_prob  → range [-1, +1]
-    """
     if not _load_finbert():
         return _keyword_fallback(text)
 
@@ -172,7 +168,7 @@ def analyse_sentiment_finbert(text: str) -> SentimentResult:
         pos_prob  = prob_map.get("positive", 0.0)
         neg_prob  = prob_map.get("negative", 0.0)
         score     = round(pos_prob - neg_prob, 4)          # [-1, +1]
-        label     = max(prob_map, key=prob_map.__getitem__) # dominant class
+        label     = max(prob_map, key=prob_map.__getitem__) 
         confidence = round(max(probs), 4)
 
         return SentimentResult(text=text[:100], score=score, label=label, confidence=confidence)
@@ -199,7 +195,7 @@ def analyse_sentiment_finbert(text: str) -> SentimentResult:
 #         kafka_connected=True,
 #         finbert_loaded=True,
 #         api_provider="Alpha Vantage",
-#         last_update=datetime.utcnow().isoformat()
+#         last_update=datetime.now(timezone.utc).isoformat()
 #     )
 
 @app.get("/api/v1/news")
@@ -215,7 +211,7 @@ async def get_news(
     # Check cache
     if cache_key in news_cache:
         cached_data, cached_time = news_cache[cache_key]
-        if (datetime.utcnow() - cached_time).seconds < CACHE_TTL_SECONDS:
+        if (datetime.now(timezone.utc).replace(tzinfo=None) - cached_time).seconds < CACHE_TTL_SECONDS:
             return cached_data
     
     async with httpx.AsyncClient() as client:
@@ -287,7 +283,7 @@ async def get_news(
             }
             
             # Cache the result
-            news_cache[cache_key] = (result, datetime.utcnow())
+            news_cache[cache_key] = (result, datetime.now(timezone.utc).replace(tzinfo=None))
             
             return result
             
@@ -419,6 +415,8 @@ async def get_sentiment_aggregate(ticker: str):
             
         except httpx.TimeoutException:
             raise HTTPException(status_code=504, detail="Request timeout")
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 

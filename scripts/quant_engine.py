@@ -9,19 +9,14 @@ import json
 import os
 import logging
 import uuid
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import List, Optional, Dict
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 import httpx
 from databases import Database
 from predictive_model import get_model, fetch_historical_ohlcv
-
-app = FastAPI(
-    title="Quant-Engine-ML",
-    description="ML-based Technical analysis + Sentiment fusion engine using Alpha Vantage",
-    version="3.0.0"
-)
 
 # Configuration
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
@@ -36,13 +31,18 @@ KAFKA_TOPIC_TRADING_SIGNALS = "trading_signals"
 # Initialize Database
 database = Database(DATABASE_URL)
 
-@app.on_event("startup")
-async def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     await database.connect()
-
-@app.on_event("shutdown")
-async def shutdown():
+    yield
     await database.disconnect()
+
+app = FastAPI(
+    title="Quant-Engine-ML",
+    description="ML-based Technical analysis + Sentiment fusion engine using Alpha Vantage",
+    version="3.0.0",
+    lifespan=lifespan,
+)
 
 # Data Models 
 
@@ -67,6 +67,8 @@ class TechnicalIndicators(BaseModel):
     timestamp: str
 
 class QuantInsight(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
     symbol: str
     technical_score: float
     sentiment_score: float
@@ -316,7 +318,7 @@ async def get_quant_insights(symbols: str = Query("AAPL,NVDA,MSFT")):
                     "action": prediction.action,
                     "model": prediction.model_type,
                     "features": json.dumps(prediction.feature_importances),
-                    "ts": datetime.utcnow()
+                    "ts": datetime.now(timezone.utc)
                 })
 
                 reasoning = build_shap_reasoning(
@@ -356,7 +358,7 @@ async def get_quant_insights(symbols: str = Query("AAPL,NVDA,MSFT")):
                     model_type=prediction.model_type,
                     sentiment_factors=sentiment_factors,
                     risk_level="MEDIUM" if 0.4 < prediction.probability_increase < 0.6 else "LOW",
-                    timestamp=datetime.utcnow().isoformat(),
+                    timestamp=datetime.now(timezone.utc).isoformat(),
                 )
                 insights.append(insight)
                 await publish_to_kafka(KAFKA_TOPIC_QUANT_INSIGHTS, insight.model_dump())
@@ -389,7 +391,7 @@ async def get_trading_signal(symbol: str):
         symbol=symbol, action=insight["action"], entry_price=round(current_price, 2),
         stop_loss=round(current_price * mults[0], 2), take_profit=round(current_price * mults[1], 2),
         position_size_pct=5.0 if "STRONG" in insight["action"] else 3.0,
-        confidence=insight["confidence"], risk_reward_ratio=2.4, timestamp=datetime.utcnow().isoformat()
+        confidence=insight["confidence"], risk_reward_ratio=2.4, timestamp=datetime.now(timezone.utc).isoformat()
     )
     await publish_to_kafka(KAFKA_TOPIC_TRADING_SIGNALS, signal.model_dump())
     return signal

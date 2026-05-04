@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server"
+import { getServerSession } from "next-auth"
+import { authOptions } from "@/app/api/auth/[...nextauth]/route"
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
 const FINNHUB_BASE    = "https://finnhub.io/api/v1"
@@ -56,14 +58,15 @@ async function fetchPrice(symbol: string): Promise<{ price: number; changePercen
   }
 }
 
-export async function GET() {
-  // Fetch live prices for all holdings in parallel
-  const livePrices = await Promise.all(
-    HOLDINGS.map(async (h) => ({ symbol: h.symbol, ...(await fetchPrice(h.symbol)) }))
-  )
+type Holding = { symbol: string; quantity: number; avgCost: number }
+type LivePrice = { price: number; changePercent: number }
 
-  const positions = HOLDINGS.map((h) => {
-    const live         = livePrices.find((p) => p.symbol === h.symbol)
+export function computePortfolioStats(
+  holdings: Holding[],
+  prices: Map<string, LivePrice>,
+) {
+  const positions = holdings.map((h) => {
+    const live         = prices.get(h.symbol)
     const currentPrice = live?.price ?? 0
     const marketValue  = h.quantity * currentPrice
     const costBasis    = h.quantity * h.avgCost
@@ -82,13 +85,12 @@ export async function GET() {
     }
   }).filter((p) => p.currentPrice > 0)
 
-  const totalValue   = positions.reduce((s, p) => s + p.marketValue, 0)
-  const totalCost    = HOLDINGS.reduce((s, h) => s + h.quantity * h.avgCost, 0)
-  const totalPnL     = totalValue - totalCost
-  const todayPnL     = positions.reduce((s, p) => s + p.marketValue * (p.changePercent / 100), 0)
-  const todayPnLPct  = totalValue > 0 ? (todayPnL / (totalValue - todayPnL)) * 100 : 0
+  const totalValue  = positions.reduce((s, p) => s + p.marketValue, 0)
+  const totalCost   = holdings.reduce((s, h) => s + h.quantity * h.avgCost, 0)
+  const totalPnL    = totalValue - totalCost
+  const todayPnL    = positions.reduce((s, p) => s + p.marketValue * (p.changePercent / 100), 0)
+  const todayPnLPct = totalValue > 0 ? (todayPnL / (totalValue - todayPnL)) * 100 : 0
 
-  // Add allocation % now that we have totalValue
   const positionsWithAlloc = positions.map((p) => ({
     ...p,
     allocation: totalValue > 0 ? Math.round((p.marketValue / totalValue) * 1000) / 10 : 0,
@@ -104,13 +106,35 @@ export async function GET() {
     positionCount:   positions.length,
   }
 
+  return { stats, positions: positionsWithAlloc }
+}
+
+export async function GET() {
+  const session = await getServerSession(authOptions)
+  if (!session) {
+    return NextResponse.json({ message: "Unauthorised" }, { status: 401 })
+  }
+
+  // Fetch live prices for all holdings in parallel
+  const livePrices = await Promise.all(
+    HOLDINGS.map(async (h) => ({ symbol: h.symbol, ...(await fetchPrice(h.symbol)) }))
+  )
+
+  const priceMap = new Map(
+    livePrices
+      .filter((p): p is typeof p & LivePrice => p.price != null)
+      .map((p) => [p.symbol, { price: p.price, changePercent: p.changePercent }])
+  )
+
+  const { stats, positions: positionsWithAlloc } = computePortfolioStats(HOLDINGS, priceMap)
+
   // Simulate 30-day history ending at current totalValue, starting from totalCost
   const history = Array.from({ length: 30 }, (_, i) => {
     const date = new Date()
     date.setDate(date.getDate() - (29 - i))
     const progress = i / 29
     // Walk from cost basis to current value with slight noise
-    const trend = totalCost + (totalValue - totalCost) * progress
+    const trend = stats.totalCost + (stats.totalValue - stats.totalCost) * progress
     const noise = trend * (Math.sin(i * 2.5) * 0.015 + Math.cos(i * 1.3) * 0.01)
     return {
       date: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),

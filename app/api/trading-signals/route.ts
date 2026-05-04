@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server"
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY
-const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY
 const FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
-const ALPHA_VANTAGE_BASE_URL = "https://www.alphavantage.co/query"
+const COINGECKO_BASE  = "https://api.coingecko.com/api/v3"
+
+const COINGECKO_IDS: Record<string, string> = {
+  BTC: "bitcoin", ETH: "ethereum", SOL: "solana",
+  BNB: "binancecoin", XRP: "ripple", DOGE: "dogecoin",
+}
 
 interface TradingSignal {
   id: number
@@ -76,26 +80,26 @@ async function fetchFinnhubQuote(symbol: string): Promise<QuoteData | null> {
   }
 }
 
-async function fetchAlphaVantageCryptoQuote(fromCurrency: string): Promise<QuoteData | null> {
-  if (!ALPHA_VANTAGE_API_KEY) return null
+async function fetchCoinGeckoCryptoQuote(symbol: string): Promise<QuoteData | null> {
+  const cgId = COINGECKO_IDS[symbol]
+  if (!cgId) return null
   try {
     const res = await fetch(
-      `${ALPHA_VANTAGE_BASE_URL}?function=CURRENCY_EXCHANGE_RATE&from_currency=${fromCurrency}&to_currency=USD&apikey=${ALPHA_VANTAGE_API_KEY}`
+      `${COINGECKO_BASE}/coins/markets?vs_currency=usd&ids=${cgId}&price_change_percentage=24h`,
+      { next: { revalidate: 60 } }
     )
     if (!res.ok) return null
-    const data = await res.json()
-    if (data["Note"] || data["Information"]) return null
-    const rate = data["Realtime Currency Exchange Rate"]
-    if (!rate) return null
-    const price = parseFloat(rate["5. Exchange Rate"])
-    if (!price || price === 0) return null
+    const [coin] = await res.json()
+    if (!coin) return null
+    const price  = Number(coin.current_price)
+    const change = Number(coin.price_change_24h) ?? 0
     return {
       price,
-      changePercent: 0,
-      high: price * 1.01,
-      low: price * 0.99,
-      open: price,
-      previousClose: price,
+      changePercent: Number(coin.price_change_percentage_24h) ?? 0,
+      high:          Number(coin.high_24h)  || price,
+      low:           Number(coin.low_24h)   || price,
+      open:          price - change,
+      previousClose: price - change,
     }
   } catch {
     return null
@@ -134,7 +138,6 @@ function computeSignal(quote: QuoteData): Omit<TradingSignal, "id" | "asset" | "
     probabilityIncrease = 0.5 + (combinedScore - 50) / 200
   }
 
-  probabilityIncrease = Math.max(0.15, Math.min(0.92, probabilityIncrease))
   const confidence = Math.round(50 + Math.abs(combinedScore - 50) * 0.9)
 
   // ATR-like range percentage from day's OHLC
@@ -170,12 +173,19 @@ function computeSignal(quote: QuoteData): Omit<TradingSignal, "id" | "asset" | "
     sentimentScore,
     riskReward,
     probabilityIncrease,
-    featureImportances: {
-      momentum_1d:    0.45,
-      stoch_position: 0.35,
-      gap_signal:     0.20,
-    },
-    modelType: Math.abs(combinedScore - 50) > 15 ? "gradient_boosting" : "xgboost",
+    // Normalized contribution of each OHLC factor to this specific signal (sums to 1.0)
+    featureImportances: (() => {
+      const raw = {
+        momentum_1d:    Math.abs(momentumScore - 50),
+        stoch_position: Math.abs(rangePosition - 50),
+        gap_signal:     Math.abs(gapScore - 50),
+      }
+      const total = Object.values(raw).reduce((s, v) => s + v, 0)
+      return total > 0
+        ? Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, Math.round(v / total * 1000) / 1000]))
+        : { momentum_1d: 0.45, stoch_position: 0.35, gap_signal: 0.20 }
+    })(),
+    modelType: "ohlc_technical_signal",
   }
 }
 
@@ -202,7 +212,7 @@ export async function GET(request: Request) {
         let quote = await fetchFinnhubQuote(cfg.finnhubSymbol)
 
         if (!quote && cfg.isCrypto && cfg.avFromCurrency) {
-          quote = await fetchAlphaVantageCryptoQuote(cfg.avFromCurrency)
+          quote = await fetchCoinGeckoCryptoQuote(cfg.avFromCurrency)
         }
 
         if (!quote || quote.price === 0) return null

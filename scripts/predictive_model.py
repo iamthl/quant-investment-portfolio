@@ -350,7 +350,7 @@ class QuantPredictiveModel:
         if SHAP_AVAILABLE and self.explainer is not None:
             try:
                 sv = self.explainer.shap_values(latest_s)
-                # GradientBoosting returns (n_samples, n_features) directly;
+                # GradientBoosting returns (n_samples, n_features) directly
                 # some versions/models return a list [class0, class1] — take class 1
                 if isinstance(sv, list):
                     sv = sv[1] if len(sv) > 1 else sv[0]
