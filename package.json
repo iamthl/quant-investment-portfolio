@@ -6,7 +6,10 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "start": "next start"
+    "start": "next start",
+    "test": "jest --no-coverage",
+    "test:unit": "jest --testPathPatterns=__tests__/unit --no-coverage",
+    "test:integration": "jest --testPathPatterns=__tests__/integration --no-coverage"
   },
   "dependencies": {
     "@ai-sdk/google": "^2.0.46",
@@ -72,10 +75,13 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.9",
     "@types/bcryptjs": "^3.0.0",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22",
     "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "jest": "^30.3.0",
+    "jest-environment-node": "^30.3.0",
     "postcss": "^8.5",
     "prisma": "^7.7.0",
     "tailwindcss": "^4.1.9",
