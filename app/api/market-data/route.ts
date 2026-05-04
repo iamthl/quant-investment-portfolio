@@ -27,12 +27,11 @@ interface QuoteData {
 }
 
 // In-memory cache
-const quoteCache: Map<string, { data: QuoteData; timestamp: number }> = new Map()
+export const quoteCache: Map<string, { data: QuoteData; timestamp: number }> = new Map()
 const historyCache: Map<string, { data: any; timestamp: number }> = new Map()
-const CACHE_TTL = 60000 
-const HISTORY_TTL = 300000
+export const CACHE_TTL = 60_000   // 1 min for quotes
+const HISTORY_TTL = 300_000  // 5 min - after this, attempt a refresh but still serve stale on failure
 
-// 1. QUOTE FETCHERS (GET)
 
 async function fetchFinnhubQuote(symbol: string): Promise<QuoteData | null> {
   if (!FINNHUB_API_KEY) return null
@@ -93,7 +92,6 @@ async function fetchAlphaVantageQuote(symbol: string): Promise<QuoteData | null>
   }
 }
 
-// 2. HISTORY FETCHERS
 
 // Helper: Fetch history from Alpha Vantage if Finnhub fails
 async function fetchAlphaVantageHistory(symbol: string) {
@@ -135,7 +133,6 @@ async function fetchAlphaVantageHistory(symbol: string) {
   }
 }
 
-// 3. API HANDLERS
 
 async function fetchCoinGeckoQuote(symbol: string): Promise<QuoteData | null> {
   const cgId = COINGECKO_IDS[symbol]
@@ -185,13 +182,13 @@ export async function GET(request: Request) {
     if (isCrypto) {
       // CoinGecko for crypto: real price, change, volume, high/low
       quote = await fetchCoinGeckoQuote(symbol)
-      // Finnhub as fallback (maps BTC → BINANCE:BTCUSDT)
+      // Finnhub as fallback (maps BTC -> BINANCE:BTCUSDT)
       if (!quote) {
         const finnhubPair = CRYPTO_FINNHUB_MAP[symbol]
         if (finnhubPair) quote = await fetchFinnhubQuote(finnhubPair).then(q => q ? { ...q, symbol } : null)
       }
     } else {
-      // Stocks: Finnhub → Alpha Vantage fallback
+      // Stocks: Finnhub -> Alpha Vantage fallback
       quote = await fetchFinnhubQuote(symbol)
       if (!quote) quote = await fetchAlphaVantageQuote(symbol)
     }
@@ -217,51 +214,51 @@ export async function POST(request: Request) {
     const symbol = body.symbol
     const { from, to } = body
 
-    // 1. Check Cache (Critical for Alpha Vantage limits)
-    const cached = historyCache.get(symbol)
-    if (cached && Date.now() - cached.timestamp < HISTORY_TTL) {
-        return NextResponse.json(cached.data)
-    }
-
-    // Map crypto tickers to Finnhub pair format
     const upperSymbol   = symbol?.toUpperCase()
     const finnhubPair   = CRYPTO_FINNHUB_MAP[upperSymbol]
     const isCrypto      = !!finnhubPair
     const finnhubSymbol = finnhubPair ?? symbol
 
-    // 1. Try Finnhub First (Preferred)
+    // Serve fresh cache immediately — skip all network calls
+    const cached = historyCache.get(symbol)
+    const cacheAge = cached ? Date.now() - cached.timestamp : Infinity
+    if (cached && cacheAge < HISTORY_TTL) {
+      return NextResponse.json({ ...cached.data, stale: false })
+    }
+
+    // Attempt live sources 
+
+    // Finnhub candles (preferred)
     if (FINNHUB_API_KEY) {
       const resolution = "D"
       const toTime   = to   || Math.floor(Date.now() / 1000)
-      const fromTime = from || Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60)
-
-      // Crypto uses /crypto/candle; stocks use /stock/candle
+      const fromTime = from || Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60
       const endpoint = isCrypto ? "crypto/candle" : "stock/candle"
       const url = `${FINNHUB_BASE_URL}/${endpoint}?symbol=${finnhubSymbol}&resolution=${resolution}&from=${fromTime}&to=${toTime}&token=${FINNHUB_API_KEY}`
 
-      const response = await fetch(url)
-      const data = await response.json()
-
-      if (data.s === "ok") {
-        const bars = data.t.map((timestamp: number, index: number) => ({
-            date: new Date(timestamp * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-            price: Number(data.c[index]),
-            open: Number(data.o[index]),
-            high: Number(data.h[index]),
-            low: Number(data.l[index]),
-            volume: Number(data.v[index])
-        }))
-        const result = { symbol, bars, source: "finnhub_real" }
-        historyCache.set(symbol, { data: result, timestamp: Date.now() })
-        return NextResponse.json(result)
-      }
-
-      if (data.error) {
-        console.warn(`[Finnhub History] Error for ${symbol}: ${data.error}`)
+      try {
+        const response = await fetch(url)
+        const data = await response.json()
+        if (data.s === "ok") {
+          const bars = data.t.map((timestamp: number, index: number) => ({
+            date:   new Date(timestamp * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+            price:  Number(data.c[index]),
+            open:   Number(data.o[index]),
+            high:   Number(data.h[index]),
+            low:    Number(data.l[index]),
+            volume: Number(data.v[index]),
+          }))
+          const result = { symbol, bars, source: "finnhub_real" }
+          historyCache.set(symbol, { data: result, timestamp: Date.now() })
+          return NextResponse.json({ ...result, stale: false })
+        }
+        if (data.error) console.warn(`[Finnhub History] ${symbol}: ${data.error}`)
+      } catch (e) {
+        console.warn(`[Finnhub History] fetch failed for ${symbol}:`, e)
       }
     }
 
-    // CoinGecko historical OHLC for crypto
+    // CoinGecko OHLC (crypto fallback)
     if (isCrypto) {
       const cgId = COINGECKO_IDS[upperSymbol]
       if (cgId) {
@@ -278,31 +275,41 @@ export async function POST(request: Request) {
             )
             const bars = ohlc.map(([ts, o, h, l, c]) => ({
               date:   new Date(ts).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-              price:  c,
-              open:   o,
-              high:   h,
-              low:    l,
+              price:  c, open: o, high: h, low: l,
               volume: volMap.get(Math.floor(ts / 86400000)) ?? 0,
             }))
             const result = { symbol, bars, source: "coingecko" }
             historyCache.set(symbol, { data: result, timestamp: Date.now() })
-            return NextResponse.json(result)
+            return NextResponse.json({ ...result, stale: false })
           }
         } catch (e) {
           console.error(`[CoinGecko History] ${symbol}:`, e)
         }
       }
-      return NextResponse.json({ error: `Historical data unavailable for ${symbol}` }, { status: 404 })
-    }
-    const fallbackData = await fetchAlphaVantageHistory(symbol)
-    
-    if (fallbackData) {
-        historyCache.set(symbol, { data: fallbackData, timestamp: Date.now() })
-        return NextResponse.json(fallbackData)
     }
 
-    // 3. If Both Fail, Return Error
-    return NextResponse.json({ error: "Unable to fetch historical data from any source" }, { status: 500 })
+    // Alpha Vantage daily (stock fallback)
+    if (!isCrypto) {
+      const fallbackData = await fetchAlphaVantageHistory(symbol)
+      if (fallbackData) {
+        historyCache.set(symbol, { data: fallbackData, timestamp: Date.now() })
+        return NextResponse.json({ ...fallbackData, stale: false })
+      }
+    }
+
+    //  All live sources failed — serve stale cache if available 
+    if (cached) {
+      const staleMins = Math.round(cacheAge / 60_000)
+      console.warn(`[Market Data] All sources rate-limited for ${symbol} — serving ${staleMins}m stale cache`)
+      return NextResponse.json({
+        ...cached.data,
+        stale:      true,
+        cachedAt:   new Date(cached.timestamp).toISOString(),
+        retryAfter: 60,  // seconds — hint for client polling
+      })
+    }
+
+    return NextResponse.json({ error: "No historical data available", retryAfter: 60 }, { status: 503 })
 
   } catch (error) {
     console.error("[API Crash]", error)
